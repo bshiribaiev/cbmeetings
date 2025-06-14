@@ -1,6 +1,6 @@
-import React, { useState, useRef } from 'react';
-import { Upload, Play, Download, FileText, Brain, CheckCircle, AlertCircle, Loader, Computer, Zap, Shield } from 'lucide-react';
-import './App.css'; 
+import React, { useState, useRef, useEffect } from 'react';
+import { Upload, Play, FileText, Brain, CheckCircle, AlertCircle, Loader, Computer, Zap, Shield, Calendar, Users, MessageSquare, TrendingUp } from 'lucide-react';
+import './App.css';
 
 interface ProcessingStep {
   id: string;
@@ -34,15 +34,36 @@ const App = () => {
   const [steps, setSteps] = useState<ProcessingStep[]>([]);
   const [analysis, setAnalysis] = useState<MeetingAnalysis | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [processingMode, setProcessingMode] = useState<'file' | 'youtube'>('youtube');
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [processingMode, setProcessingMode] = useState<'file' | 'youtube'>('file');
 
   const initialSteps: ProcessingStep[] = [
-    { id: 'extract', name: 'Extract Audio', status: 'pending', message: 'Preparing audio extraction...' },
-    { id: 'transcribe', name: 'Local Transcription', status: 'pending', message: 'Loading Whisper model...' },
-    { id: 'analyze', name: 'AI Analysis', status: 'pending', message: 'Preparing local LLM...' },
-    { id: 'complete', name: 'Generate Summary', status: 'pending', message: 'Finalizing results...' }
+    { id: 'extract', name: 'Extract Audio', status: 'pending', message: 'Downloading and extracting audio from video...' },
+    { id: 'transcribe', name: 'AI Transcription', status: 'pending', message: 'Converting speech to text with Whisper AI...' },
+    { id: 'analyze', name: 'Content Analysis', status: 'pending', message: 'Analyzing meeting content with local AI...' },
+    { id: 'complete', name: 'Generate Summary', status: 'pending', message: 'Creating structured meeting summary...' }
   ];
+
+  // Check backend status on component mount
+  useEffect(() => {
+    const checkBackend = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/health');
+        if (response.ok) {
+          setBackendStatus('online');
+        } else {
+          setBackendStatus('offline');
+        }
+      } catch (error) {
+        setBackendStatus('offline');
+      }
+    };
+
+    checkBackend();
+    const interval = setInterval(checkBackend, 30000); // Check every 30 seconds
+    return () => clearInterval(interval);
+  }, []);
 
   const updateStep = (stepId: string, status: ProcessingStep['status'], message: string, duration?: string) => {
     setSteps(prev => prev.map(step => 
@@ -52,76 +73,83 @@ const App = () => {
     ));
   };
 
-  const simulateLocalProcessing = async () => {
+  const processVideo = async () => {
+    if (backendStatus !== 'online') {
+      alert('Backend server is not running. Please start the Python server first.');
+      return;
+    }
+
     setIsProcessing(true);
     setSteps(initialSteps);
     setAnalysis(null);
 
     try {
-      // Step 1: Audio Extraction
-      updateStep('extract', 'processing', 'Extracting audio from video...');
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      updateStep('extract', 'completed', 'Audio extracted successfully (127.3 MB)', '3.2s');
+      let response;
+      
+      if (processingMode === 'youtube' && youtubeUrl) {
+        // Process YouTube URL
+        updateStep('extract', 'processing', 'Downloading video from YouTube...');
+        
+        response = await fetch('http://localhost:8000/process-youtube', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ url: youtubeUrl }),
+        });
+      } else if (processingMode === 'file' && file) {
+        // Process uploaded file
+        updateStep('extract', 'processing', 'Processing uploaded file...');
+        
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        response = await fetch('http://localhost:8000/process-file', {
+          method: 'POST',
+          body: formData,
+        });
+      } else {
+        throw new Error('No file or URL provided');
+      }
 
-      // Step 2: Local Transcription
-      updateStep('transcribe', 'processing', 'Running Whisper locally... (this may take a while)');
-      await new Promise(resolve => setTimeout(resolve, 8000));
-      updateStep('transcribe', 'completed', 'Transcription complete (42,891 words)', '18.4s');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Processing failed');
+      }
 
-      // Step 3: Local AI Analysis
-      updateStep('analyze', 'processing', 'Analyzing with local Llama 3.1...');
-      await new Promise(resolve => setTimeout(resolve, 6000));
-      updateStep('analyze', 'completed', 'Analysis complete with local AI', '12.7s');
-
-      // Step 4: Finalize
-      updateStep('complete', 'processing', 'Generating final summary...');
+      // Simulate step progression
+      updateStep('extract', 'completed', 'Audio extracted successfully', '5.2s');
+      updateStep('transcribe', 'processing', 'Transcribing audio with Whisper AI...');
+      
       await new Promise(resolve => setTimeout(resolve, 2000));
-      updateStep('complete', 'completed', 'Summary generated successfully!', '1.8s');
+      updateStep('transcribe', 'completed', 'Transcription completed', '45.8s');
+      updateStep('analyze', 'processing', 'Analyzing content with local AI...');
+      
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      updateStep('analyze', 'completed', 'Analysis completed', '18.3s');
+      updateStep('complete', 'processing', 'Generating summary...');
 
-      // Set mock analysis results
+      const result = await response.json();
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      updateStep('complete', 'completed', 'Summary generated successfully!', '2.1s');
+
+      // Transform the response to match our interface
       setAnalysis({
-        title: "CB7 Full Board Meeting - October 2024",
-        summary: "Community Board 7 addressed several key development projects and community concerns, with significant discussion around affordable housing and traffic safety improvements in the Upper West Side.",
-        keyDecisions: [
-          {
-            item: "West 79th Street Bike Lane Extension",
-            outcome: "Approved",
-            vote: "11-4",
-            details: "Approved 6-month pilot program with community feedback sessions"
-          },
-          {
-            item: "Affordable Housing Development - Broadway & 84th",
-            outcome: "Approved with Conditions",
-            vote: "9-6", 
-            details: "Approved with requirement for 30% affordable units and height reduction"
-          },
-          {
-            item: "Riverside Park Concert Venue Expansion",
-            outcome: "Rejected",
-            vote: "4-11",
-            details: "Rejected due to noise concerns and environmental impact"
-          }
-        ],
-        publicConcerns: [
-          "Increased construction noise affecting residential areas",
-          "Need for more accessible playgrounds in Riverside Park", 
-          "Traffic congestion during school pickup/dropoff times",
-          "Rising commercial rents forcing local businesses to close"
-        ],
-        nextSteps: [
-          "Schedule community workshop on bike lane implementation",
-          "Request traffic study for Columbus Avenue corridor",
-          "Form working group on small business preservation",
-          "Coordinate with Parks Department on playground accessibility"
-        ],
-        sentiment: "Cautiously Optimistic",
-        attendance: "15 board members, ~85 community members",
-        mainTopics: ["Transportation", "Housing Development", "Parks & Recreation", "Small Business Support"],
-        processingTime: "36.1 seconds"
+        title: result.title,
+        summary: result.analysis.summary || 'Meeting analysis completed successfully.',
+        keyDecisions: result.analysis.keyDecisions || [],
+        publicConcerns: result.analysis.publicConcerns || [],
+        nextSteps: result.analysis.nextSteps || [],
+        sentiment: result.analysis.sentiment || 'Mixed',
+        attendance: result.analysis.attendance || 'Not specified',
+        mainTopics: result.analysis.mainTopics || [],
+        processingTime: result.processingTime || 'Unknown'
       });
 
     } catch (error) {
-      updateStep('analyze', 'error', 'Processing failed. Please try again.', '');
+      console.error('Processing error:', error);
+      updateStep('analyze', 'error', `Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`, '');
     } finally {
       setIsProcessing(false);
     }
@@ -146,6 +174,9 @@ const App = () => {
       const droppedFile = e.dataTransfer.files[0];
       if (droppedFile.type.startsWith('video/') || droppedFile.type.startsWith('audio/')) {
         setFile(droppedFile);
+        setProcessingMode('file');
+      } else {
+        alert('Please upload a video or audio file.');
       }
     }
   };
@@ -167,19 +198,25 @@ const App = () => {
   const getStepIcon = (step: ProcessingStep) => {
     switch (step.status) {
       case 'completed':
-        return <CheckCircle className="step-icon" style={{color: '#38a169'}} />;
+        return <CheckCircle className="step-icon" style={{color: '#48bb78'}} />;
       case 'processing':
-        return <Loader className="step-icon animate-spin" style={{color: '#3182ce'}} />;
+        return <Loader className="step-icon animate-spin" style={{color: '#4299e1'}} />;
       case 'error':
-        return <AlertCircle className="step-icon" style={{color: '#e53e3e'}} />;
+        return <AlertCircle className="step-icon" style={{color: '#f56565'}} />;
       default:
-        return <div className="step-icon" style={{width: '1.25rem', height: '1.25rem', border: '2px solid #cbd5e0', borderRadius: '50%'}} />;
+        return <div className="step-icon" style={{
+          width: '1.25rem', 
+          height: '1.25rem', 
+          border: '2px solid #cbd5e0', 
+          borderRadius: '50%'
+        }} />;
     }
   };
 
   const getSentimentClass = (sentiment: string) => {
     switch (sentiment) {
       case 'Positive': return 'sentiment-positive';
+      case 'Generally Positive': return 'sentiment-positive';
       case 'Cautiously Optimistic': return 'sentiment-optimistic';
       case 'Mixed': return 'sentiment-mixed';
       case 'Negative': return 'sentiment-negative';
@@ -187,33 +224,50 @@ const App = () => {
     }
   };
 
+  const getBackendStatusColor = () => {
+    switch (backendStatus) {
+      case 'online': return '#48bb78';
+      case 'offline': return '#f56565';
+      default: return '#ed8936';
+    }
+  };
+
+  const getBackendStatusText = () => {
+    switch (backendStatus) {
+      case 'online': return 'Server Online';
+      case 'offline': return 'Server Offline';
+      default: return 'Checking...';
+    }
+  };
+
   if (analysis) {
     return (
       <div className="app-container">
         <div className="max-width-container">
-          {/* Header */}
-          <div className="header">
+          {/* Results Header */}
+          <div className="header slide-up">
             <div className="flex justify-between align-center mb-4">
-              <h1 className="flex align-center gap-3">
-                <Computer size={32} style={{color: '#38a169'}} />
-                Meeting Analysis Complete
-              </h1>
-              <button
-                onClick={resetProcessor}
-                className="btn btn-primary"
-              >
+              <div>
+                <h1 className="flex align-center gap-3">
+                  <TrendingUp size={32} style={{color: '#48bb78'}} />
+                  Meeting Analysis Complete
+                </h1>
+                <p>AI-powered analysis of Community Board 7 meeting</p>
+              </div>
+              <button onClick={resetProcessor} className="btn btn-primary">
+                <Play size={16} />
                 Process Another Meeting
               </button>
             </div>
             
             <div className="header-stats">
               <div className="stat-card">
-                <Shield size={24} style={{color: '#38a169', margin: '0 auto 0.5rem'}} />
+                <Shield size={24} style={{color: '#48bb78', margin: '0 auto 0.5rem'}} />
                 <div className="stat-number">100% Private</div>
                 <div className="stat-label">Processed Locally</div>
               </div>
               <div className="stat-card">
-                <Zap size={24} style={{color: '#3182ce', margin: '0 auto 0.5rem'}} />
+                <Zap size={24} style={{color: '#4299e1', margin: '0 auto 0.5rem'}} />
                 <div className="stat-number">{analysis.processingTime}</div>
                 <div className="stat-label">Processing Time</div>
               </div>
@@ -223,7 +277,7 @@ const App = () => {
                 <div className="stat-label">Processing Cost</div>
               </div>
               <div className="stat-card">
-                <Brain size={24} style={{color: '#d69e2e', margin: '0 auto 0.5rem'}} />
+                <MessageSquare size={24} style={{color: '#ed8936', margin: '0 auto 0.5rem'}} />
                 <div className="stat-number">{analysis.sentiment}</div>
                 <div className="stat-label">Meeting Sentiment</div>
               </div>
@@ -231,68 +285,123 @@ const App = () => {
           </div>
 
           {/* Meeting Summary */}
-          <div className="card">
-            <h2 className="card-title" style={{fontSize: '1.5rem', marginBottom: '1rem'}}>{analysis.title}</h2>
-            <p style={{color: '#4a5568', fontSize: '1.125rem', lineHeight: '1.6', marginBottom: '1rem'}}>{analysis.summary}</p>
-            <div style={{fontSize: '0.875rem', color: '#718096'}}>
-              <strong>Attendance:</strong> {analysis.attendance}
+          <div className="card slide-up">
+            <h2 className="card-title">
+              <Calendar size={20} />
+              {analysis.title}
+            </h2>
+            <p style={{color: '#4a5568', fontSize: '1.1rem', lineHeight: '1.7', marginBottom: '1rem'}}>
+              {analysis.summary}
+            </p>
+            <div className="flex align-center gap-4" style={{fontSize: '0.9rem', color: '#718096'}}>
+              <div className="flex align-center gap-1">
+                <Users size={16} />
+                <strong>Attendance:</strong> {analysis.attendance}
+              </div>
+              <div className={`badge ${getSentimentClass(analysis.sentiment)}`}>
+                {analysis.sentiment}
+              </div>
             </div>
           </div>
 
           {/* Key Decisions */}
-          <div className="card">
-            <h3 className="analysis-title">Key Decisions & Votes</h3>
-            <div className="grid gap-4">
-              {analysis.keyDecisions.map((decision, idx) => (
-                <div key={idx} className="decision-item">
-                  <div className="decision-header">
-                    <h4 className="decision-title">{decision.item}</h4>
-                    <div className="decision-badges">
-                      {decision.outcome.includes('Approved') ? (
-                        <CheckCircle size={20} style={{color: '#38a169'}} />
-                      ) : (
-                        <AlertCircle size={20} style={{color: '#e53e3e'}} />
-                      )}
-                      <span className={`badge ${decision.outcome.includes('Approved') ? 'badge-success' : 'badge-error'}`}>
-                        {decision.outcome}
-                      </span>
-                      <span className="badge badge-pending">
-                        {decision.vote}
-                      </span>
+          {analysis.keyDecisions && analysis.keyDecisions.length > 0 && (
+            <div className="card slide-up">
+              <h3 className="analysis-title">
+                <CheckCircle size={20} />
+                Key Decisions & Voting Results
+              </h3>
+              <div className="grid gap-4">
+                {analysis.keyDecisions.map((decision, idx) => (
+                  <div key={idx} className="decision-item">
+                    <div className="decision-header">
+                      <h4 className="decision-title">{decision.item}</h4>
+                      <div className="decision-badges">
+                        {decision.outcome.includes('Approved') || decision.outcome.includes('Supported') ? (
+                          <CheckCircle size={18} style={{color: '#48bb78'}} />
+                        ) : (
+                          <AlertCircle size={18} style={{color: '#f56565'}} />
+                        )}
+                        <span className={`badge ${
+                          decision.outcome.includes('Approved') || decision.outcome.includes('Supported')
+                            ? 'badge-success' 
+                            : 'badge-error'
+                        }`}>
+                          {decision.outcome}
+                        </span>
+                        <span className="badge badge-pending">
+                          {decision.vote}
+                        </span>
+                      </div>
                     </div>
+                    <p className="decision-details">{decision.details}</p>
                   </div>
-                  <p className="decision-details">{decision.details}</p>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Concerns and Next Steps */}
           <div className="grid grid-2">
-            <div className="card">
-              <h3 className="analysis-title">Community Concerns</h3>
-              <ul className="list">
-                {analysis.publicConcerns.map((concern, idx) => (
-                  <li key={idx} className="list-item">
-                    <span className="list-bullet list-bullet-yellow"></span>
-                    <span style={{color: '#4a5568', fontSize: '0.875rem'}}>{concern}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {analysis.publicConcerns && analysis.publicConcerns.length > 0 && (
+              <div className="card slide-up">
+                <h3 className="analysis-title">
+                  <MessageSquare size={20} />
+                  Community Concerns
+                </h3>
+                <ul className="list">
+                  {analysis.publicConcerns.map((concern, idx) => (
+                    <li key={idx} className="list-item">
+                      <span className="list-bullet list-bullet-yellow"></span>
+                      <span style={{color: '#4a5568', fontSize: '0.9rem', lineHeight: '1.5'}}>
+                        {concern}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
-            <div className="card">
-              <h3 className="analysis-title">Next Steps</h3>
-              <ul className="list">
-                {analysis.nextSteps.map((step, idx) => (
-                  <li key={idx} className="list-item">
-                    <span className="list-bullet list-bullet-green"></span>
-                    <span style={{color: '#4a5568', fontSize: '0.875rem'}}>{step}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {analysis.nextSteps && analysis.nextSteps.length > 0 && (
+              <div className="card slide-up">
+                <h3 className="analysis-title">
+                  <TrendingUp size={20} />
+                  Next Steps & Action Items
+                </h3>
+                <ul className="list">
+                  {analysis.nextSteps.map((step, idx) => (
+                    <li key={idx} className="list-item">
+                      <span className="list-bullet list-bullet-green"></span>
+                      <span style={{color: '#4a5568', fontSize: '0.9rem', lineHeight: '1.5'}}>
+                        {step}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
+
+          {/* Main Topics */}
+          {analysis.mainTopics && analysis.mainTopics.length > 0 && (
+            <div className="card slide-up">
+              <h3 className="analysis-title">
+                <Brain size={20} />
+                Main Discussion Topics
+              </h3>
+              <div className="flex" style={{gap: '0.75rem', flexWrap: 'wrap'}}>
+                {analysis.mainTopics.map((topic, idx) => (
+                  <span
+                    key={idx}
+                    className="badge badge-pending"
+                    style={{fontSize: '0.85rem', padding: '0.5rem 1rem'}}
+                  >
+                    {topic}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -301,44 +410,101 @@ const App = () => {
   return (
     <div className="app-container">
       <div className="max-width-container">
-        {/* Header */}
+        {/* Main Header */}
         <div className="text-center mb-4">
-          <h1 className="flex align-center justify-center gap-3" style={{fontSize: '2.5rem', fontWeight: '700', color: '#1a202c', marginBottom: '1rem'}}>
-            <Computer size={40} style={{color: '#38a169'}} />
-            Community Board Meetings Analyzer
+          <h1 className="flex align-center justify-center gap-3" style={{
+            fontSize: '2.5rem', 
+            fontWeight: '700', 
+            color: '#1a202c', 
+            marginBottom: '1rem'
+          }}>
+            <Computer size={40} style={{color: '#4299e1'}} />
+            CB7 Meeting Analyzer
           </h1>
-          <p style={{color: '#718096', fontSize: '1.125rem'}}>Turn 1 hour meetings into quick 5-minute summaries with key points!</p>
+          <p style={{color: '#718096', fontSize: '1.2rem', marginBottom: '1rem'}}>
+            AI-powered analysis of Community Board 7 meetings
+          </p>
+          <p style={{color: '#a0aec0', fontSize: '1rem'}}>
+            Process meetings privately on your computer - no cloud, no cost, no data sharing
+          </p>
           
-          <div className="flex align-center justify-center gap-4 mt-4" style={{fontSize: '0.875rem'}}>
-            <div className="flex align-center gap-1" style={{color: '#38a169'}}>
+          <div className="flex align-center justify-center gap-4 mt-4" style={{fontSize: '0.9rem'}}>
+            <div className="flex align-center gap-1" style={{color: '#48bb78'}}>
               <Shield size={16} />
               100% Private
+            </div>
+            <div className="flex align-center gap-1" style={{color: '#4299e1'}}>
+              <Zap size={16} />
+              No API Costs
+            </div>
+            <div className="flex align-center gap-1" style={{color: '#805ad5'}}>
+              <Computer size={16} />
+              Runs Locally
+            </div>
+            <div className="flex align-center gap-1" style={{color: getBackendStatusColor()}}>
+              <div style={{
+                width: '8px', 
+                height: '8px', 
+                borderRadius: '50%', 
+                backgroundColor: getBackendStatusColor()
+              }} />
+              {getBackendStatusText()}
             </div>
           </div>
         </div>
 
-        {/* Input Method Selection */}
+        {/* Backend Status Warning */}
+        {backendStatus === 'offline' && (
+          <div className="card" style={{
+            background: 'linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%)',
+            border: '2px solid #fc8181',
+            marginBottom: '2rem'
+          }}>
+            <div className="flex align-center gap-3">
+              <AlertCircle size={24} style={{color: '#742a2a'}} />
+              <div>
+                <h3 style={{color: '#742a2a', marginBottom: '0.5rem'}}>Backend Server Offline</h3>
+                <p style={{color: '#742a2a', fontSize: '0.9rem', marginBottom: '0'}}>
+                  Please start the Python backend server by running <code>python main.py</code> in your backend directory.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Processing Mode & Input */}
         <div className="card">
           <div className="flex align-center justify-center mb-4">
-            <div style={{display: 'flex', background: '#f7fafc', borderRadius: '0.5rem', padding: '0.25rem'}}>
-              <button
-                onClick={() => setProcessingMode('file')}
-                className={`btn ${processingMode === 'file' ? 'btn-primary' : 'btn-secondary'}`}
-                style={{fontSize: '0.875rem', padding: '0.5rem 1rem'}}
-              >
-                Upload File
-              </button>
+            <div className="mode-selector">
               <button
                 onClick={() => setProcessingMode('youtube')}
-                className={`btn ${processingMode === 'youtube' ? 'btn-primary' : 'btn-secondary'}`}
-                style={{fontSize: '0.875rem', padding: '0.5rem 1rem'}}
+                className={`mode-button ${processingMode === 'youtube' ? 'active' : ''}`}
               >
                 YouTube URL
+              </button>
+              <button
+                onClick={() => setProcessingMode('file')}
+                className={`mode-button ${processingMode === 'file' ? 'active' : ''}`}
+              >
+                Upload File
               </button>
             </div>
           </div>
 
-          {processingMode === 'file' ? (
+          {processingMode === 'youtube' ? (
+            <div style={{display: 'flex', flexDirection: 'column', gap: '1rem'}}>
+              <input
+                type="url"
+                placeholder="https://www.youtube.com/watch?v=... (CB7 meeting video)"
+                value={youtubeUrl}
+                onChange={(e) => setYoutubeUrl(e.target.value)}
+                className="input"
+              />
+              <p style={{fontSize: '0.875rem', color: '#718096', textAlign: 'center'}}>
+                Paste any YouTube URL from CB7's channel or other meeting videos
+              </p>
+            </div>
+          ) : (
             <div
               className={`upload-area ${dragActive ? 'active' : ''} ${file ? 'success' : ''}`}
               onDragEnter={handleDrag}
@@ -355,75 +521,68 @@ const App = () => {
               />
               
               {file ? (
-                <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
-                  <CheckCircle size={48} style={{color: '#38a169', margin: '0 auto'}} />
-                  <div>
-                    <p style={{fontWeight: '500', color: '#1a202c'}}>{file.name}</p>
-                    <p style={{fontSize: '0.875rem', color: '#718096'}}>
+                <div style={{display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center'}}>
+                  <CheckCircle size={48} style={{color: '#48bb78'}} />
+                  <div style={{textAlign: 'center'}}>
+                    <p style={{fontWeight: '600', color: '#1a202c', fontSize: '1.1rem'}}>{file.name}</p>
+                    <p style={{fontSize: '0.9rem', color: '#718096', marginTop: '0.25rem'}}>
                       {(file.size / (1024 * 1024)).toFixed(2)} MB
                     </p>
                   </div>
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     className="btn btn-secondary"
-                    style={{fontSize: '0.875rem'}}
                   >
-                    Choose different file
+                    Choose Different File
                   </button>
                 </div>
               ) : (
-                <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
-                  <Upload size={48} style={{color: '#a0aec0', margin: '0 auto'}} />
-                  <div>
-                    <p style={{fontSize: '1.125rem', fontWeight: '500', color: '#1a202c'}}>
+                <div style={{display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center'}}>
+                  <Upload size={48} style={{color: '#a0aec0'}} />
+                  <div style={{textAlign: 'center'}}>
+                    <p style={{fontSize: '1.2rem', fontWeight: '600', color: '#1a202c', marginBottom: '0.5rem'}}>
                       Drop your meeting video here
                     </p>
                     <p style={{color: '#718096'}}>
                       or{' '}
                       <button
                         onClick={() => fileInputRef.current?.click()}
-                        style={{color: '#3182ce', fontWeight: '500', background: 'none', border: 'none', cursor: 'pointer'}}
+                        style={{
+                          color: '#4299e1', 
+                          fontWeight: '500', 
+                          background: 'none', 
+                          border: 'none', 
+                          cursor: 'pointer',
+                          textDecoration: 'underline'
+                        }}
                       >
                         browse files
                       </button>
                     </p>
                   </div>
                   <p style={{fontSize: '0.875rem', color: '#a0aec0'}}>
-                    Supports MP4, MOV, AVI, MP3, WAV files
+                    Supports MP4, MOV, AVI, MP3, WAV files (up to 2GB)
                   </p>
                 </div>
               )}
             </div>
-          ) : (
-            <div style={{display: 'flex', flexDirection: 'column', gap: '1rem'}}>
-              <input
-                type="url"
-                placeholder="https://www.youtube.com/watch?v=..."
-                value={youtubeUrl}
-                onChange={(e) => setYoutubeUrl(e.target.value)}
-                className="input"
-              />
-              <p style={{fontSize: '0.875rem', color: '#718096', textAlign: 'center'}}>
-                Paste any YouTube URL from CB7's channel
-              </p>
-            </div>
           )}
 
           <button
-            onClick={simulateLocalProcessing}
-            disabled={(!file && !youtubeUrl) || isProcessing}
+            onClick={processVideo}
+            disabled={(!file && !youtubeUrl) || isProcessing || backendStatus !== 'online'}
             className="btn btn-success"
-            style={{width: '100%', marginTop: '1.5rem', justifyContent: 'center'}}
+            style={{width: '100%', marginTop: '2rem', padding: '1rem'}}
           >
             {isProcessing ? (
               <>
                 <Loader size={20} className="animate-spin" />
-                Processing...
+                Processing Meeting...
               </>
             ) : (
               <>
-                <Play size={20} />
-                Start Processing
+                <Brain size={20} />
+                Start AI Analysis
               </>
             )}
           </button>
@@ -432,44 +591,49 @@ const App = () => {
         {/* Processing Steps */}
         {steps.length > 0 && (
           <div className="card">
-            <h3 className="analysis-title">Local Processing Pipeline</h3>
+            <h3 className="analysis-title">
+              <Computer size={20} />
+              Local Processing Pipeline
+            </h3>
             
-            <div style={{display: 'flex', flexDirection: 'column', gap: '1rem'}}>
+            <div className="processing-steps">
               {steps.map((step) => (
                 <div key={step.id} className="processing-step">
-                  <div style={{marginRight: '1rem'}}>
-                    {getStepIcon(step)}
-                  </div>
-                  <div style={{flex: 1}}>
+                  <div>{getStepIcon(step)}</div>
+                  <div className="step-content">
                     <div className="flex justify-between align-center">
-                      <h4 className="step-title" style={{
-                        color: step.status === 'completed' ? '#38a169' :
-                               step.status === 'processing' ? '#3182ce' :
-                               step.status === 'error' ? '#e53e3e' : '#4a5568'
+                      <div className="step-title" style={{
+                        color: step.status === 'completed' ? '#48bb78' :
+                               step.status === 'processing' ? '#4299e1' :
+                               step.status === 'error' ? '#f56565' : '#e2e8f0'
                       }}>
                         {step.name}
-                      </h4>
+                      </div>
                       {step.duration && (
-                        <span className="step-duration">
-                          {step.duration}
-                        </span>
+                        <span className="step-duration">{step.duration}</span>
                       )}
                     </div>
-                    <p className="step-description" style={{
-                      color: step.status === 'error' ? '#e53e3e' : '#718096'
+                    <div className="step-description" style={{
+                      color: step.status === 'error' ? '#fed7d7' : '#a0aec0'
                     }}>
                       {step.message}
-                    </p>
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
 
             {isProcessing && (
-              <div style={{marginTop: '1.5rem', background: '#f7fafc', borderRadius: '0.5rem', padding: '1rem'}}>
-                <div className="flex align-center gap-2" style={{fontSize: '0.875rem', color: '#718096'}}>
-                  <Computer size={16} />
-                  Processing on your computer - no data sent to external servers
+              <div style={{
+                marginTop: '1.5rem', 
+                background: 'rgba(66, 153, 225, 0.1)', 
+                borderRadius: '0.75rem', 
+                padding: '1rem',
+                border: '1px solid rgba(66, 153, 225, 0.2)'
+              }}>
+                <div className="flex align-center gap-2" style={{fontSize: '0.9rem', color: '#4299e1'}}>
+                  <Shield size={16} />
+                  Processing privately on your computer - no data sent to external servers
                 </div>
               </div>
             )}

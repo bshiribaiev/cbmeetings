@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 
 backend/venv/
+backend/processed_meetings
+backend
