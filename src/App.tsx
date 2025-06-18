@@ -39,7 +39,7 @@ const App = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const initialSteps: ProcessingStep[] = [
-    { id: 'extract', name: 'Extract Audio', status: 'pending', message: 'Downloading and extracting audio from video...' },
+    { id: 'extract', name: 'Extracting Audio', status: 'pending', message: 'Downloading and extracting audio from video...' },
     { id: 'transcribe', name: 'AI Transcription', status: 'pending', message: 'Converting speech to text with Whisper AI...' },
     { id: 'analyze', name: 'Content Analysis', status: 'pending', message: 'Analyzing meeting content with local AI...' },
     { id: 'complete', name: 'Generate Summary', status: 'pending', message: 'Creating structured meeting summary...' }
@@ -252,7 +252,7 @@ const App = () => {
                   <TrendingUp size={32} style={{color: '#48bb78'}} />
                   Meeting Analysis Complete
                 </h1>
-                <p>AI-powered analysis of Community Board 7 meeting</p>
+                <p>AI-powered analysis of Community Board meetings</p>
               </div>
               <button onClick={resetProcessor} className="btn btn-primary">
                 <Play size={16} />
@@ -418,29 +418,14 @@ const App = () => {
             color: '#1a202c', 
             marginBottom: '1rem'
           }}>
-            <Computer size={40} style={{color: '#4299e1'}} />
-            CB7 Meeting Analyzer
+            <img src='/logo.png' width={50} height={50} />
+            CB Meetings Analyzer
           </h1>
           <p style={{color: '#718096', fontSize: '1.2rem', marginBottom: '1rem'}}>
-            AI-powered analysis of Community Board 7 meetings
+            AI-powered analysis of Community Board meetings
           </p>
-          <p style={{color: '#a0aec0', fontSize: '1rem'}}>
-            Process meetings privately on your computer - no cloud, no cost, no data sharing
-          </p>
-          
+
           <div className="flex align-center justify-center gap-4 mt-4" style={{fontSize: '0.9rem'}}>
-            <div className="flex align-center gap-1" style={{color: '#48bb78'}}>
-              <Shield size={16} />
-              100% Private
-            </div>
-            <div className="flex align-center gap-1" style={{color: '#4299e1'}}>
-              <Zap size={16} />
-              No API Costs
-            </div>
-            <div className="flex align-center gap-1" style={{color: '#805ad5'}}>
-              <Computer size={16} />
-              Runs Locally
-            </div>
             <div className="flex align-center gap-1" style={{color: getBackendStatusColor()}}>
               <div style={{
                 width: '8px', 
@@ -501,7 +486,7 @@ const App = () => {
                 className="input"
               />
               <p style={{fontSize: '0.875rem', color: '#718096', textAlign: 'center'}}>
-                Paste any YouTube URL from CB7's channel or other meeting videos
+                Paste any YouTube URL from any CB channel or other meeting videos
               </p>
             </div>
           ) : (
@@ -593,7 +578,7 @@ const App = () => {
           <div className="card">
             <h3 className="analysis-title">
               <Computer size={20} />
-              Local Processing Pipeline
+              Processing...
             </h3>
             
             <div className="processing-steps">
@@ -616,27 +601,13 @@ const App = () => {
                     <div className="step-description" style={{
                       color: step.status === 'error' ? '#fed7d7' : '#a0aec0'
                     }}>
-                      {step.message}
+                      {/* {step.message} */}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
 
-            {isProcessing && (
-              <div style={{
-                marginTop: '1.5rem', 
-                background: 'rgba(66, 153, 225, 0.1)', 
-                borderRadius: '0.75rem', 
-                padding: '1rem',
-                border: '1px solid rgba(66, 153, 225, 0.2)'
-              }}>
-                <div className="flex align-center gap-2" style={{fontSize: '0.9rem', color: '#4299e1'}}>
-                  <Shield size={16} />
-                  Processing privately on your computer - no data sent to external servers
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
