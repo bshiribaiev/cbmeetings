@@ -75,7 +75,7 @@ const App = () => {
 
   const processVideo = async () => {
     if (backendStatus !== 'online') {
-      alert('Backend server is not running. Please start the Python server first.');
+      alert('Server is not active');
       return;
     }
 
@@ -97,7 +97,9 @@ const App = () => {
           },
           body: JSON.stringify({ url: youtubeUrl }),
         });
-      } else if (processingMode === 'file' && file) {
+      } 
+
+      else if (processingMode === 'file' && file) {
         // Process uploaded file
         updateStep('extract', 'processing', 'Processing uploaded file...');
         
@@ -108,7 +110,9 @@ const App = () => {
           method: 'POST',
           body: formData,
         });
-      } else {
+      } 
+      
+      else {
         throw new Error('No file or URL provided');
       }
 
@@ -118,15 +122,15 @@ const App = () => {
       }
 
       // Simulate step progression
-      updateStep('extract', 'completed', 'Audio extracted successfully', '5.2s');
+      updateStep('extract', 'completed', 'Audio extracted successfully');
       updateStep('transcribe', 'processing', 'Transcribing audio with Whisper AI...');
       
       await new Promise(resolve => setTimeout(resolve, 2000));
-      updateStep('transcribe', 'completed', 'Transcription completed', '45.8s');
+      updateStep('transcribe', 'completed', 'Transcription completed');
       updateStep('analyze', 'processing', 'Analyzing content with local AI...');
       
       await new Promise(resolve => setTimeout(resolve, 1500));
-      updateStep('analyze', 'completed', 'Analysis completed', '18.3s');
+      updateStep('analyze', 'completed', 'Analysis completed');
       updateStep('complete', 'processing', 'Generating summary...');
 
       const result = await response.json();
@@ -147,10 +151,14 @@ const App = () => {
         processingTime: result.processingTime || 'Unknown'
       });
 
-    } catch (error) {
+    } 
+    
+    catch (error) {
       console.error('Processing error:', error);
       updateStep('analyze', 'error', `Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`, '');
-    } finally {
+    } 
+    
+    finally {
       setIsProcessing(false);
     }
   };
@@ -410,7 +418,6 @@ const App = () => {
   return (
     <div className="app-container">
       <div className="max-width-container">
-        {/* Main Header */}
         <div className="text-center mb-4">
           <h1 className="flex align-center justify-center gap-3" style={{
             fontSize: '2.5rem', 

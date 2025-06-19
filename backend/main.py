@@ -8,13 +8,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict
 import subprocess
+import traceback
 
 # FastAPI and server imports
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from backend.improved_analyzer import ImprovedCBAnalyzer
+from chunked_analyzer import ChunkedCBAnalyzer
 
 # AI and processing imports
 import whisper
@@ -28,20 +29,20 @@ except ImportError:
     OLLAMA_AVAILABLE = False
     print("Ollama not available - will use basic analysis")
 
-# Configure logging
+# Configure logging with more detailed format
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('cb_processor.log')
+    ]
 )
 logger = logging.getLogger(__name__)
 
 # Pydantic models
-
-
 class ProcessRequest(BaseModel):
     url: str
-
 
 class HealthStatus(BaseModel):
     whisper: bool
@@ -49,7 +50,7 @@ class HealthStatus(BaseModel):
     ffmpeg: bool
     yt_dlp: bool
     database: bool
-
+    ollama_models: List[str] = []
 
 class MeetingAnalysis(BaseModel):
     summary: str
@@ -63,7 +64,6 @@ class MeetingAnalysis(BaseModel):
     budgetItems: List[str] = []
     addresses: List[str] = []
 
-
 # FastAPI App Configuration
 app = FastAPI(
     title="CB Meeting Processor",
@@ -75,13 +75,13 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",      # React dev server
+        "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:3001",      # Alternative React port
+        "http://localhost:3001",
         "http://127.0.0.1:3001",
-        "http://localhost:5173",      # Vite dev server (if using Vite)
+        "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "*"  # TEMPORARY - allows all origins for testing
+        "*"  # TEMPORARY - for development
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -92,10 +92,6 @@ app.add_middleware(
 whisper_model = None
 db_path = Path("cb_meetings.db")
 output_dir = Path("processed_meetings")
-autonomous_running = False
-
-# Processor class for cb meetings
-
 
 class CBProcessor:
     def __init__(self):
@@ -106,13 +102,12 @@ class CBProcessor:
     def setup_directories(self):
         output_dir.mkdir(exist_ok=True)
 
-    # Database for tracking processed meetings
     def init_database(self):
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
 
-            # Create tables
+            # Create tables with better error handling
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS processed_videos (
                     video_id TEXT PRIMARY KEY,
@@ -123,7 +118,8 @@ class CBProcessor:
                     duration TEXT,
                     file_size INTEGER,
                     status TEXT DEFAULT 'pending',
-                    error_message TEXT
+                    error_message TEXT,
+                    processing_attempts INTEGER DEFAULT 0
                 )
             ''')
 
@@ -134,6 +130,7 @@ class CBProcessor:
                     transcript_length INTEGER,
                     processing_time REAL,
                     created_at TEXT,
+                    analysis_method TEXT,
                     FOREIGN KEY (video_id) REFERENCES processed_videos (video_id)
                 )
             ''')
@@ -150,53 +147,52 @@ class CBProcessor:
 
             conn.commit()
             conn.close()
-            logger.info("Database initialized successfully")
+            logger.info("✅ Database initialized successfully")
 
         except Exception as e:
-            logger.error(f"Database initialization failed: {e}")
+            logger.error(f"❌ Database initialization failed: {e}")
+            raise
 
-    # Load AI models
     def load_models(self):
         global whisper_model
 
         try:
-            logger.info("Loading Whisper model...")
-            whisper_model = whisper.load_model("large")
-            logger.info("Whisper model loaded successfully")
+            logger.info("🔄 Loading Whisper model...")
+            whisper_model = whisper.load_model("medium")
+            logger.info("✅ Whisper model loaded successfully")
 
             # Test Ollama if available
             if OLLAMA_AVAILABLE:
                 try:
                     models = ollama.list()
-                    available_models = [model['name']
-                                        for model in models.get('models', [])]
-                    if not ('llama3.1' in available_models or any('llama' in model for model in available_models)):
-                        logger.warning(
-                            "No suitable Ollama models found. Run: ollama pull llama3.1")
+                    available_models = [model['name'] for model in models.get('models', [])]
+                    logger.info(f"📋 Available Ollama models: {available_models}")
+                    
+                    if not available_models:
+                        logger.warning("⚠️ No Ollama models found. Run: ollama pull llama3:latest")
+                    else:
+                        logger.info("✅ Ollama connection successful")
+                        
                 except Exception as e:
-                    logger.warning(f"Ollama connection issue: {e}")
+                    logger.warning(f"⚠️ Ollama connection issue: {e}")
+            else:
+                logger.warning("⚠️ Ollama not available")
 
         except Exception as e:
-            logger.error(f"Model loading failed: {e}")
-            return False
-
-        return True
+            logger.error(f"❌ Model loading failed: {e}")
+            raise
 
     def check_ffmpeg(self) -> bool:
         return shutil.which("ffmpeg") is not None
 
     def clean_youtube_url(self, url: str) -> str:
         import re
-
-        # Extract just the video ID
         match = re.search(r'[?&]v=([^&]+)', url)
         if match:
             video_id = match.group(1)
             return f"https://www.youtube.com/watch?v={video_id}"
+        return url
 
-        return url  # Return original if no match
-
-    # Extracting video info with link
     def extract_video_info(self, url: str) -> Dict:
         try:
             clean_url = self.clean_youtube_url(url)
@@ -218,11 +214,9 @@ class CBProcessor:
                 }
 
         except Exception as e:
-            logger.error(f"Failed to extract video info: {e}")
-            raise HTTPException(
-                status_code=400, detail=f"Failed to extract video info: {str(e)}")
+            logger.error(f"❌ Failed to extract video info: {e}")
+            raise HTTPException(status_code=400, detail=f"Failed to extract video info: {str(e)}")
 
-    # Determine if it is a cb meeting
     def is_meeting_video(self, title: str, description: str = "") -> bool:
         meeting_keywords = [
             'board meeting', 'full board', 'committee meeting',
@@ -234,11 +228,10 @@ class CBProcessor:
         combined_text = f"{title} {description}".lower()
         return any(keyword in combined_text for keyword in meeting_keywords)
 
-    # Extract audio from yt video
     def extract_audio_from_youtube(self, url: str, output_path: str) -> tuple:
         try:
             clean_url = self.clean_youtube_url(url)
-            logger.info(f"Extracting audio from: {url}")
+            logger.info(f"🎬 Extracting audio from: {url}")
 
             ydl_opts = {
                 'format': 'bestaudio/best',
@@ -248,7 +241,7 @@ class CBProcessor:
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
                 }],
-                'quiet': False,  # Show progress
+                'quiet': False,
             }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -258,7 +251,7 @@ class CBProcessor:
                 # Find the downloaded audio file
                 for file in Path(output_path).glob("audio.*"):
                     if file.suffix in ['.mp3', '.m4a', '.webm']:
-                        logger.info(f"Audio extracted: {file}")
+                        logger.info(f"✅ Audio extracted: {file}")
                         return str(file), title
 
             raise Exception("No audio file found after extraction")
@@ -267,11 +260,10 @@ class CBProcessor:
             error_msg = str(e)
             if "ffmpeg" in error_msg.lower():
                 error_msg += "\n\nFix: Install ffmpeg with 'brew install ffmpeg' (Mac) or visit https://ffmpeg.org"
-            logger.error(f"Audio extraction failed: {error_msg}")
+            logger.error(f"❌ Audio extraction failed: {error_msg}")
             raise Exception(error_msg)
 
     def extract_audio_from_file(self, file_path: str, output_path: str) -> str:
-        """Extract audio from uploaded video file"""
         try:
             file_path = Path(file_path)
             output_file = Path(output_path) / f"audio_{file_path.stem}.mp3"
@@ -279,7 +271,7 @@ class CBProcessor:
             # If it's already an audio file, just copy it
             if file_path.suffix.lower() in ['.mp3', '.wav', '.m4a', '.flac']:
                 shutil.copy2(file_path, output_file)
-                logger.info(f"Audio file copied: {output_file}")
+                logger.info(f"✅ Audio file copied: {output_file}")
                 return str(output_file)
 
             # Extract audio from video file using ffmpeg
@@ -301,25 +293,64 @@ class CBProcessor:
             logger.error(f"❌ Audio extraction from file failed: {e}")
             raise Exception(f"Audio extraction failed: {str(e)}")
 
+    def optimize_audio_for_transcription(self, audio_path: str) -> str:
+        try:
+            output_path = str(Path(audio_path).with_suffix('.optimized.wav'))
+
+            cmd = [
+                'ffmpeg', '-i', audio_path,
+                '-ar', '16000',
+                '-ac', '1',
+                '-af',
+                'highpass=f=80,'
+                'lowpass=f=8000,'
+                'volume=1.5,'
+                'compand=attacks=0.3:decays=0.8:points=-70/-70|-60/-20|-20/-5|-5/-5',
+                '-acodec', 'pcm_s16le',
+                '-f', 'wav',
+                output_path, '-y', '-v', 'quiet'
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode == 0 and Path(output_path).exists():
+                logger.info("✅ Audio optimized for better transcription")
+                return output_path
+            else:
+                logger.warning("⚠️ Audio optimization failed, using original")
+                return audio_path
+
+        except Exception as e:
+            logger.warning(f"⚠️ Audio optimization failed: {e}")
+            return audio_path
+
     def transcribe_audio(self, audio_path: str) -> str:
-        """Transcribe audio using local Whisper"""
         try:
             if not whisper_model:
                 raise Exception("Whisper model not loaded")
 
-            logger.info(f"🎙️  Transcribing audio: {audio_path}")
+            optimized_path = self.optimize_audio_for_transcription(audio_path)
+            logger.info(f"🎙️ Transcribing audio: {optimized_path}")
 
             # Transcribe with Whisper
             result = whisper_model.transcribe(
-                audio_path,
-                language="en",  # Assume English for CB7 meetings
-                task="transcribe"
+                optimized_path,
+                language="en",
+                task="transcribe",
+                temperature=0.0,
+                fp16=False,
+                verbose=False,
+                word_timestamps=False,
+                condition_on_previous_text=False,
+                compression_ratio_threshold=2.4,
+                logprob_threshold=-1.0,
+                no_speech_threshold=0.6,
             )
 
             transcript = result["text"].strip()
             word_count = len(transcript.split())
 
-            logger.info(f"✅ Transcription complete: {word_count} words")
+            logger.info(f"✅ Transcription complete: {word_count:,} words")
             return transcript
 
         except Exception as e:
@@ -327,28 +358,37 @@ class CBProcessor:
             raise Exception(f"Transcription failed: {str(e)}")
 
     def analyze_with_ollama(self, transcript: str) -> Dict:
-        """Analyze transcript with improved methods"""
+        """Enhanced analysis with chunked processing for long transcripts"""
         if not OLLAMA_AVAILABLE:
-            return self.create_basic_analysis(transcript)
+            logger.info("🔄 Ollama not available, using keyword analysis")
+            return self.create_enhanced_analysis(transcript)
 
         try:
-            logger.info("🧠 Analyzing transcript with improved AI methods...")
-
-            analyzer = ImprovedCBAnalyzer()
+            transcript_length = len(transcript)
+            word_count = len(transcript.split())
+            
+            logger.info(f"🧠 Analyzing transcript: {transcript_length:,} chars, {word_count:,} words")
+            
+            # Choose analyzer based on transcript length
+            if transcript_length > 15000 or word_count > 3000:
+                logger.info("📄 Using chunked analyzer for long transcript")
+                analyzer = ChunkedCBAnalyzer()
+            else:
+                logger.info("📄 Using standard analyzer for shorter transcript")
+                analyzer = ChunkedCBAnalyzer()
 
             # Get available models
-            models = ollama.list()
-            available_models = []
-            for model in models.get('models', []):
-                model_name = model.get('name') or model.get('model', '')
-                if model_name:
-                    available_models.append(model_name)
+            try:
+                models = ollama.list()
+                available_models = [model.get('name', '') for model in models.get('models', [])]
+                logger.info(f"📋 Available models: {available_models}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not get model list: {e}")
+                available_models = ['llama3:latest']
 
-            # Choose model based on JSON capability (from diagnostics)
-            # llama3:latest works better for JSON than llama3.1:latest
-            preferred_models = ['llama3:latest',
-                                'llama3', 'llama3.1:latest', 'llama3.1']
-            selected_model = 'llama3:latest'  # default to the one that works for JSON
+            # Choose best available model
+            preferred_models = ['llama3:latest', 'llama3', 'llama3.1:latest', 'llama3.1']
+            selected_model = 'llama3:latest'
 
             for preferred in preferred_models:
                 if any(preferred in available for available in available_models):
@@ -356,134 +396,161 @@ class CBProcessor:
                         available for available in available_models if preferred in available)
                     break
 
-            logger.info(f"Using model: {selected_model}")
+            logger.info(f"🎯 Using model: {selected_model}")
 
-            # Perform enhanced analysis with multiple strategies
-            result = analyzer.analyze_with_enhanced_prompting(
-                transcript, selected_model)
+            # Perform analysis
+            result = analyzer.analyze_cb_meeting(transcript, selected_model)
 
-            logger.info("✅ Enhanced analysis completed successfully")
-            return result
-
-        except Exception as e:
-            logger.error(f"❌ Enhanced analysis failed: {e}")
-            return self.create_basic_analysis(transcript)
-
-    # Keep your original method as backup (rename it):
-    def original_analyze_with_ollama(self, transcript: str) -> Dict:
-        """Original analysis method (backup)"""
-        # Your existing analyze_with_ollama code goes here
-        # Just rename your current method to this
-
-    # Also, add this method to improve Whisper accuracy:
-    def transcribe_audio(self, audio_path: str) -> str:
-        """Enhanced transcribe audio using local Whisper with better settings"""
-        try:
-            if not whisper_model:
-                raise Exception("Whisper model not loaded")
-
-            logger.info(f"🎙️  Transcribing audio: {audio_path}")
-
-            # Enhanced Whisper settings for better accuracy
-            result = whisper_model.transcribe(
-                audio_path,
-                language="en",  # CB meetings are in English
-                task="transcribe",
-                word_timestamps=True,  # Better accuracy
-                condition_on_previous_text=False,  # Reduce hallucination
-                compression_ratio_threshold=2.4,  # Filter out low-quality segments
-                logprob_threshold=-1.0,  # Filter out uncertain predictions
-                no_speech_threshold=0.6,  # Better silence detection
-                temperature=0.0,  # Deterministic output
-                best_of=5,  # Try multiple candidates
-                beam_size=5,  # Beam search for better accuracy
-                patience=1.0,
-                length_penalty=1.0,
-                suppress_tokens=[-1],  # Suppress specific tokens if needed
-                initial_prompt="This is a Community Board meeting discussing local NYC neighborhood issues, zoning, transportation, and community concerns."  # Context hint
-            )
-
-            transcript = result["text"].strip()
-            word_count = len(transcript.split())
-
-            # Log quality metrics
-            segments = result.get("segments", [])
-            if segments:
-                avg_confidence = sum(s.get("avg_logprob", 0)
-                                     for s in segments) / len(segments)
-                logger.info(
-                    f"✅ Transcription complete: {word_count} words, avg confidence: {avg_confidence:.3f}")
+            # Validate and enhance result
+            if self.validate_analysis_result(result):
+                logger.info("✅ Analysis completed successfully")
+                # Add metadata
+                result['_metadata'] = {
+                    'transcript_length': transcript_length,
+                    'word_count': word_count,
+                    'analysis_method': 'chunked' if transcript_length > 15000 else 'standard',
+                    'model_used': selected_model
+                }
+                return result
             else:
-                logger.info(f"✅ Transcription complete: {word_count} words")
-
-            return transcript
+                logger.warning("⚠️ Analysis validation failed, using fallback")
+                return self.create_enhanced_analysis(transcript)
 
         except Exception as e:
-            logger.error(f"❌ Transcription failed: {e}")
-            raise Exception(f"Transcription failed: {str(e)}")
+            logger.error(f"❌ Analysis failed: {e}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return self.create_enhanced_analysis(transcript)
 
-    def create_basic_analysis(self, transcript: str) -> Dict:
-        """Create basic analysis without AI (fallback)"""
+    def validate_analysis_result(self, result: Dict) -> bool:
+        """Enhanced validation for chunked analysis results"""
+        if not isinstance(result, dict):
+            return False
+
+        required_fields = ['summary', 'keyDecisions', 'publicConcerns', 'nextSteps', 'mainTopics']
+        for field in required_fields:
+            if field not in result:
+                return False
+
+        # Check for meaningful content - more lenient for chunked analysis
+        has_content = (
+            len(str(result.get('summary', ''))) > 30 or
+            len(result.get('keyDecisions', [])) > 0 or
+            len(result.get('publicConcerns', [])) > 0 or
+            len(result.get('nextSteps', [])) > 0 or
+            len(result.get('mainTopics', [])) > 0
+        )
+
+        # Log validation details
+        if has_content:
+            decisions = len(result.get('keyDecisions', []))
+            concerns = len(result.get('publicConcerns', []))
+            topics = len(result.get('mainTopics', []))
+            logger.info(f"✅ Validation passed: {decisions} decisions, {concerns} concerns, {topics} topics")
+        else:
+            logger.warning("⚠️ Validation failed: insufficient content")
+
+        return has_content
+
+    def create_enhanced_analysis(self, transcript: str) -> Dict:
+        """Create enhanced keyword-based analysis"""
         words = transcript.lower().split()
         word_count = len(words)
 
-        # Simple keyword detection
-        decision_keywords = ['approve', 'approved', 'reject',
-                             'rejected', 'vote', 'motion', 'support', 'oppose']
-        concern_keywords = ['concern', 'problem', 'issue',
-                            'complaint', 'worried', 'traffic', 'noise']
-        topic_keywords = {
-            'Transportation': ['traffic', 'bike', 'bus', 'subway', 'parking', 'street'],
-            'Housing': ['housing', 'apartment', 'rent', 'affordable', 'development'],
-            'Parks': ['park', 'playground', 'tree', 'garden', 'recreation'],
-            'Zoning': ['zoning', 'building', 'construction', 'permit']
-        }
-
+        # Enhanced keyword detection
+        decision_keywords = ['approve', 'approved', 'reject', 'rejected', 'vote', 'motion', 'resolution']
+        concern_keywords = ['concern', 'problem', 'issue', 'complaint', 'worried']
+        
         decision_count = sum(1 for word in words if word in decision_keywords)
         concern_count = sum(1 for word in words if word in concern_keywords)
 
-        # Detect main topics
+        # Extract potential topics
+        topic_keywords = {
+            'Housing & Development': ['housing', 'apartment', 'development', 'residential', 'affordable'],
+            'Transportation': ['traffic', 'bike', 'bus', 'subway', 'parking', 'street'],
+            'Parks & Recreation': ['park', 'playground', 'tree', 'garden', 'recreation'],
+            'Zoning & Land Use': ['zoning', 'building', 'construction', 'permit', 'land use'],
+            'Budget & Finance': ['budget', 'funding', 'money', 'cost', 'expense']
+        }
+
         main_topics = []
         for topic, keywords in topic_keywords.items():
-            if any(keyword in words for keyword in keywords):
+            if any(keyword in transcript.lower() for keyword in keywords):
                 main_topics.append(topic)
 
+        # Try to extract specific decisions
+        decisions = []
+        decision_patterns = [
+            r'motion.*?(?:to\s+)?(?:approve|support|adopt|pass).*?(?:resolution|proposal|amendment)',
+            r'(?:approve|support|adopt|pass).*?(?:resolution|motion|proposal)',
+            r'vote.*?(?:\d+-\d+|unanimous|all in favor)'
+        ]
+
+        import re
+        for pattern in decision_patterns:
+            matches = re.findall(pattern, transcript.lower())
+            for match in matches[:3]:
+                decisions.append({
+                    "item": match.strip().capitalize(),
+                    "outcome": "Discussed",
+                    "vote": "Not specified",
+                    "details": "Item identified through text analysis"
+                })
+
+        # Extract concerns
+        concerns = []
+        concern_patterns = [
+            r'concern.*?(?:about|regarding|with)\s+([^.]{10,50})',
+            r'problem.*?(?:with|about)\s+([^.]{10,50})',
+            r'issue.*?(?:with|about|regarding)\s+([^.]{10,50})'
+        ]
+
+        for pattern in concern_patterns:
+            matches = re.findall(pattern, transcript.lower())
+            for match in matches[:5]:
+                concerns.append(match.strip().capitalize())
+
         return {
-            "summary": f"Community Board 7 meeting with {word_count} words of discussion. {decision_count} potential decisions and {concern_count} concerns identified through keyword analysis.",
-            "keyDecisions": [
+            "summary": f"Community Board meeting with {word_count:,} words of discussion covering {len(main_topics)} main topic areas. Analysis identified {decision_count} decision-related items and {concern_count} community concerns through enhanced keyword detection.",
+            "keyDecisions": decisions if decisions else [
                 {
-                    "item": "Meeting Analysis",
-                    "outcome": "Basic analysis completed",
+                    "item": "Meeting Analysis Completed",
+                    "outcome": "Processed",
                     "vote": "N/A",
-                    "details": "Full AI analysis requires Ollama installation with llama3.1 model"
+                    "details": f"Enhanced analysis processed {word_count:,} words with {decision_count} decision indicators"
                 }
             ],
-            "publicConcerns": ["Install Ollama for detailed concern analysis"],
-            "nextSteps": ["Install Ollama and run 'ollama pull llama3.1' for full AI analysis"],
+            "publicConcerns": concerns if concerns else [
+                f"Enhanced analysis detected {concern_count} concern-related discussions requiring detailed review"
+            ],
+            "nextSteps": [
+                "Review detailed transcript for specific action items",
+                "Follow up on identified concerns and decisions",
+                "Consider manual review for complex discussions"
+            ],
             "sentiment": "Mixed",
-            "attendance": "Not analyzed without AI",
+            "attendance": f"Meeting transcript: {word_count:,} words analyzed",
             "mainTopics": main_topics if main_topics else ["Community Board Meeting"],
             "importantDates": [],
             "budgetItems": [],
             "addresses": []
         }
 
-    def save_analysis(self, video_id: str, analysis: Dict, transcript: str, processing_time: float):
-        """Save analysis results to database"""
+    def save_analysis(self, video_id: str, analysis: Dict, transcript: str, processing_time: float, method: str = "enhanced"):
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
 
             cursor.execute('''
                 INSERT OR REPLACE INTO meeting_analysis 
-                (video_id, analysis_json, transcript_length, processing_time, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                (video_id, analysis_json, transcript_length, processing_time, created_at, analysis_method)
+                VALUES (?, ?, ?, ?, ?, ?)
             ''', (
                 video_id,
-                json.dumps(analysis),
+                json.dumps(analysis, indent=2),
                 len(transcript),
                 processing_time,
-                datetime.now().isoformat()
+                datetime.now().isoformat(),
+                method
             ))
 
             conn.commit()
@@ -493,25 +560,98 @@ class CBProcessor:
         except Exception as e:
             logger.error(f"❌ Failed to save analysis: {e}")
 
+    def save_full_transcript(self, video_id: str, transcript: str):
+        try:
+            output_dir.mkdir(exist_ok=True)
+            transcript_file = output_dir / f"{video_id}_transcript.txt"
+            
+            formatted_transcript = self.format_transcript_for_readability(transcript)
+
+            with open(transcript_file, 'w', encoding='utf-8') as f:
+                f.write(formatted_transcript)
+
+            # Update database
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute('ALTER TABLE meeting_analysis ADD COLUMN full_transcript TEXT')
+            except sqlite3.OperationalError:
+                pass
+
+            cursor.execute('''
+                UPDATE meeting_analysis 
+                SET full_transcript = ? 
+                WHERE video_id = ?
+            ''', (transcript, video_id))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Full transcript saved for {video_id}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to save transcript: {e}")
+
+    def format_transcript_for_readability(self, transcript: str) -> str:
+        try:
+            import re
+            
+            formatted = f"# CB Meeting Transcript\n"
+            formatted += f"# Processed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            formatted += f"# Word Count: {len(transcript.split()):,}\n"
+            formatted += f"# Character Count: {len(transcript):,}\n\n"
+            formatted += "=" * 60 + "\n\n"
+            
+            # Split into sentences and add line breaks
+            sentences = re.split(r'(?<=[.!?])\s+', transcript)
+            
+            current_paragraph = []
+            line_count = 0
+            
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                    
+                current_paragraph.append(sentence)
+                line_count += 1
+                
+                # Create new paragraph every 3-4 sentences or at natural breaks
+                if (line_count >= 3 and 
+                    (any(marker in sentence.lower() for marker in 
+                    ['chair:', 'member:', 'motion', 'vote', 'resolution', 'next item', 'thank you']) or
+                    line_count >= 4)):
+                    
+                    formatted += ' '.join(current_paragraph) + '\n\n'
+                    current_paragraph = []
+                    line_count = 0
+            
+            # Add any remaining sentences
+            if current_paragraph:
+                formatted += ' '.join(current_paragraph) + '\n\n'
+            
+            return formatted
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Transcript formatting failed: {e}")
+            return transcript.replace('. ', '.\n\n')
+
     def generate_summary_file(self, video_id: str, title: str, analysis: Dict):
-        """Generate human-readable summary file"""
         try:
             summary_file = output_dir / f"{video_id}_summary.md"
 
             with open(summary_file, 'w', encoding='utf-8') as f:
                 f.write(f"# {title}\n\n")
-                f.write(
-                    f"**Processed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"**Processed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"**Video ID:** {video_id}\n\n")
 
-                f.write(
-                    f"## Summary\n{analysis.get('summary', 'No summary available')}\n\n")
+                f.write(f"## Summary\n{analysis.get('summary', 'No summary available')}\n\n")
 
                 if analysis.get('keyDecisions'):
                     f.write("## Key Decisions\n")
                     for decision in analysis['keyDecisions']:
-                        f.write(
-                            f"- **{decision.get('item', 'Unknown')}**: {decision.get('outcome', 'Unknown')} ({decision.get('vote', 'No vote recorded')})\n")
+                        f.write(f"- **{decision.get('item', 'Unknown')}**: {decision.get('outcome', 'Unknown')} ({decision.get('vote', 'No vote recorded')})\n")
                         if decision.get('details'):
                             f.write(f"  - {decision['details']}\n")
                     f.write("\n")
@@ -532,120 +672,27 @@ class CBProcessor:
                     f.write("## Main Topics\n")
                     f.write(f"{', '.join(analysis['mainTopics'])}\n\n")
 
-                f.write(
-                    f"**Meeting Sentiment:** {analysis.get('sentiment', 'Unknown')}\n")
-                f.write(
-                    f"**Attendance:** {analysis.get('attendance', 'Not specified')}\n")
+                f.write(f"**Meeting Sentiment:** {analysis.get('sentiment', 'Unknown')}\n")
+                f.write(f"**Attendance:** {analysis.get('attendance', 'Not specified')}\n")
 
             logger.info(f"✅ Summary file saved: {summary_file}")
 
         except Exception as e:
             logger.error(f"❌ Failed to generate summary file: {e}")
 
-    def save_full_transcript(self, video_id: str, transcript: str):
-        """Save complete transcript for future re-analysis"""
-        try:
-            # Save to file
-            output_dir.mkdir(exist_ok=True)
-            transcript_file = output_dir / f"{video_id}_transcript.txt"
-
-            with open(transcript_file, 'w', encoding='utf-8') as f:
-                f.write(transcript)
-
-            # Also update database to include full transcript
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-
-            # Add transcript column if it doesn't exist
-            try:
-                cursor.execute(
-                    'ALTER TABLE meeting_analysis ADD COLUMN full_transcript TEXT')
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-
-            # Update with full transcript
-            cursor.execute('''
-                UPDATE meeting_analysis 
-                SET full_transcript = ? 
-                WHERE video_id = ?
-                ''', (transcript, video_id))
-
-            conn.commit()
-            conn.close()
-
-            logger.info(f"✅ Full transcript saved for {video_id}")
-
-        except Exception as e:
-            logger.error(f"❌ Failed to save transcript: {e}")
-
-    def reanalyze_existing_transcript(self, video_id: str) -> Dict:
-        """Re-analyze an existing transcript with improved analyzer"""
-        try:
-            logger.info(f"🔄 Re-analyzing existing transcript for {video_id}")
-
-            # Try to get transcript from database first
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-
-            cursor.execute(
-                'SELECT full_transcript FROM meeting_analysis WHERE video_id = ?', (video_id,))
-            result = cursor.fetchone()
-
-            if result and result[0]:
-                transcript = result[0]
-                logger.info(
-                    f"✅ Found transcript in database: {len(transcript)} characters")
-            else:
-                # Try to load from file
-                transcript_file = output_dir / f"{video_id}_transcript.txt"
-                if transcript_file.exists():
-                    with open(transcript_file, 'r', encoding='utf-8') as f:
-                        transcript = f.read()
-                    logger.info(
-                        f"✅ Found transcript file: {len(transcript)} characters")
-                else:
-                    logger.error(f"❌ No transcript found for {video_id}")
-                    return None
-
-            conn.close()
-
-            # Re-analyze with improved analyzer
-            analysis = self.analyze_with_ollama(transcript)
-
-            if analysis:
-                # Update the analysis in database
-                processing_time = 0.0  # Re-analysis time
-                self.save_analysis(video_id, analysis, transcript, processing_time)
-
-                logger.info(f"✅ Re-analysis completed for {video_id}")
-                return analysis
-            else:
-                logger.error(f"❌ Re-analysis failed for {video_id}")
-                return None
-
-        except Exception as e:
-            logger.error(f"❌ Re-analysis error: {e}")
-            return None
-
-
 # Initialize processor
 processor = CBProcessor()
 
 # API Endpoints
-
-
 @app.on_event("startup")
 async def startup_event():
-    """Initialize on startup"""
-    logger.info("🚀 CB7 Meeting Processor starting up...")
+    logger.info("🚀 CB Meeting Processor starting up...")
     logger.info("✅ Server ready for processing requests")
-
 
 @app.get("/")
 async def root():
-    """Root endpoint with basic info"""
     return {
-        "message": "CB7 Meeting Processor API",
+        "message": "CB Meeting Processor API",
         "version": "1.0.0",
         "status": "online",
         "endpoints": {
@@ -657,12 +704,9 @@ async def root():
         }
     }
 
-
 @app.get("/health")
 async def health_check():
-    """Comprehensive health check"""
     try:
-        # Test database connection
         conn = sqlite3.connect(db_path)
         conn.execute("SELECT 1")
         conn.close()
@@ -670,11 +714,12 @@ async def health_check():
     except:
         db_status = False
 
-    # Test Ollama if available
     ollama_status = False
+    ollama_models = []
     if OLLAMA_AVAILABLE:
         try:
-            ollama.list()
+            models = ollama.list()
+            ollama_models = [model['name'] for model in models.get('models', [])]
             ollama_status = True
         except:
             ollama_status = False
@@ -683,16 +728,15 @@ async def health_check():
         whisper=whisper_model is not None,
         ollama=ollama_status,
         ffmpeg=processor.check_ffmpeg(),
-        yt_dlp=True,  # Already imported successfully
-        database=db_status
+        yt_dlp=True,
+        database=db_status,
+        ollama_models=ollama_models
     )
 
     return status
 
-
 @app.post("/process-youtube")
 async def process_youtube_video(request: ProcessRequest):
-    """Process a YouTube video URL"""
     start_time = time.time()
 
     try:
@@ -705,48 +749,54 @@ async def process_youtube_video(request: ProcessRequest):
 
         # Check if it looks like a meeting
         if not processor.is_meeting_video(title, video_info.get('description', '')):
-            logger.warning(f"⚠️  Video may not be a meeting: {title}")
+            logger.warning(f"⚠️ Video may not be a meeting: {title}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Step 1: Extract audio
-            audio_path, extracted_title = processor.extract_audio_from_youtube(
-                request.url, temp_dir)
+            try:
+                # Step 1: Extract audio
+                logger.info("🎵 Extracting audio...")
+                audio_path, extracted_title = processor.extract_audio_from_youtube(
+                    request.url, temp_dir)
 
-            # Step 2: Transcribe
-            transcript = processor.transcribe_audio(audio_path)
+                # Step 2: Transcribe
+                logger.info("🎙️ Transcribing audio...")
+                transcript = processor.transcribe_audio(audio_path)
+                processor.save_full_transcript(video_id, transcript)
 
-            # Step 3: Analyze
-            analysis = processor.analyze_with_ollama(transcript)
+                # Step 3: Analyze
+                logger.info("🧠 Analyzing transcript...")
+                analysis = processor.analyze_with_ollama(transcript)
 
-            # Calculate processing time
-            processing_time = time.time() - start_time
+                # Calculate processing time
+                processing_time = time.time() - start_time
 
-            # Step 4: Save results
-            processor.save_analysis(
-                video_id, analysis, transcript, processing_time)
-            processor.generate_summary_file(video_id, title, analysis)
+                # Step 4: Save results
+                processor.save_analysis(video_id, analysis, transcript, processing_time, "enhanced")
+                processor.generate_summary_file(video_id, title, analysis)
 
-            logger.info(
-                f"✅ Processing completed in {processing_time:.1f} seconds")
+                logger.info(f"✅ Processing completed in {processing_time:.1f} seconds")
 
-            return {
-                "success": True,
-                "video_id": video_id,
-                "title": title,
-                "analysis": analysis,
-                "processingTime": f"{processing_time:.1f} seconds",
-                "transcriptLength": len(transcript),
-                "wordCount": len(transcript.split())
-            }
+                return {
+                    "success": True,
+                    "video_id": video_id,
+                    "title": title,
+                    "analysis": analysis,
+                    "processingTime": f"{processing_time:.1f} seconds",
+                    "transcriptLength": len(transcript),
+                    "wordCount": len(transcript.split())
+                }
+
+            except Exception as e:
+                logger.error(f"❌ Processing error: {e}")
+                logger.error(f"Full traceback: {traceback.format_exc()}")
+                raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
     except Exception as e:
         logger.error(f"❌ YouTube processing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/process-file")
 async def process_uploaded_file(file: UploadFile = File(...)):
-    """Process an uploaded audio/video file"""
     start_time = time.time()
 
     try:
@@ -760,11 +810,6 @@ async def process_uploaded_file(file: UploadFile = File(...)):
             raise HTTPException(
                 status_code=400, detail="Please upload a video or audio file")
 
-        # Check file size (limit to 2GB)
-        if hasattr(file, 'size') and file.size and file.size > 2 * 1024 * 1024 * 1024:
-            raise HTTPException(
-                status_code=400, detail="File too large. Maximum size is 2GB")
-
         with tempfile.TemporaryDirectory() as temp_dir:
             # Save uploaded file
             file_path = Path(temp_dir) / file.filename
@@ -775,11 +820,14 @@ async def process_uploaded_file(file: UploadFile = File(...)):
             logger.info(f"📁 File saved: {file_path} ({len(content)} bytes)")
 
             # Step 1: Extract audio
-            audio_path = processor.extract_audio_from_file(
-                str(file_path), temp_dir)
+            audio_path = processor.extract_audio_from_file(str(file_path), temp_dir)
 
             # Step 2: Transcribe
             transcript = processor.transcribe_audio(audio_path)
+
+            # Generate a video ID for the file
+            video_id = f"file_{int(start_time)}"
+            processor.save_full_transcript(video_id, transcript)
 
             # Step 3: Analyze
             analysis = processor.analyze_with_ollama(transcript)
@@ -787,16 +835,11 @@ async def process_uploaded_file(file: UploadFile = File(...)):
             # Calculate processing time
             processing_time = time.time() - start_time
 
-            # Generate a video ID for the file
-            video_id = f"file_{int(start_time)}"
-
             # Step 4: Save results
-            processor.save_analysis(
-                video_id, analysis, transcript, processing_time)
+            processor.save_analysis(video_id, analysis, transcript, processing_time, "enhanced")
             processor.generate_summary_file(video_id, file.filename, analysis)
 
-            logger.info(
-                f"✅ File processing completed in {processing_time:.1f} seconds")
+            logger.info(f"✅ File processing completed in {processing_time:.1f} seconds")
 
             return {
                 "success": True,
@@ -812,17 +855,15 @@ async def process_uploaded_file(file: UploadFile = File(...)):
         logger.error(f"❌ File processing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/meetings")
 async def get_processed_meetings():
-    """Get list of all processed meetings"""
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
         cursor.execute('''
             SELECT p.video_id, p.title, p.processed_at, p.status, 
-                   m.analysis_json, m.processing_time
+                   m.analysis_json, m.processing_time, m.analysis_method
             FROM processed_videos p
             LEFT JOIN meeting_analysis m ON p.video_id = m.video_id
             ORDER BY p.processed_at DESC
@@ -836,7 +877,8 @@ async def get_processed_meetings():
                 "title": row[1],
                 "processed_at": row[2],
                 "status": row[3],
-                "processing_time": row[5]
+                "processing_time": row[5],
+                "analysis_method": row[6] or "basic"
             }
 
             if row[4]:  # analysis_json exists
@@ -854,88 +896,10 @@ async def get_processed_meetings():
         logger.error(f"❌ Failed to get meetings: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.get("/videos")
-async def get_recent_cb7_videos():
-    """Get recent CB7 videos from YouTube (for autonomous mode)"""
-    try:
-        channel_url = "https://www.youtube.com/channel/UC_n3st90mFiSeRVUl4m8ySQ/videos"
-
-        ydl_opts = {
-            'quiet': True,
-            'extract_flat': True,
-            'playlistend': 10,
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(channel_url, download=False)
-
-            videos = []
-            for entry in info['entries'][:10]:
-                videos.append({
-                    'video_id': entry['id'],
-                    'title': entry.get('title', 'Unknown'),
-                    'url': entry['url'],
-                    'upload_date': entry.get('upload_date', ''),
-                    'is_meeting': processor.is_meeting_video(entry.get('title', ''))
-                })
-
-            return {"videos": videos}
-
-    except Exception as e:
-        logger.error(f"❌ Failed to get CB7 videos: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Development and debugging endpoints
-
-
-@app.get("/logs")
-async def get_recent_logs():
-    """Get recent system logs"""
-    try:
-        with open('cb7_processor.log', 'r') as f:
-            lines = f.readlines()
-            recent_lines = lines[-100:]  # Last 100 lines
-            return {"logs": recent_lines}
-    except FileNotFoundError:
-        return {"logs": ["No log file found"]}
-    except Exception as e:
-        return {"logs": [f"Error reading logs: {str(e)}"]}
-
-
-@app.post("/debug/test-whisper")
-async def test_whisper():
-    """Test Whisper model with a short audio sample"""
-    try:
-        if not whisper_model:
-            raise Exception("Whisper model not loaded")
-
-        # This would need a test audio file
-        return {"status": "Whisper model loaded and ready"}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/debug/test-ollama")
-async def test_ollama():
-    """Test Ollama connection"""
-    try:
-        if not OLLAMA_AVAILABLE:
-            raise Exception("Ollama not available")
-
-        models = ollama.list()
-        return {"status": "Ollama available", "models": models}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Error handlers
-
-
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
-    logger.error(f"Unhandled exception: {exc}")
+    logger.error(f"❌ Unhandled exception: {exc}")
+    logger.error(f"Full traceback: {traceback.format_exc()}")
     return JSONResponse(
         status_code=500,
         content={"detail": f"Internal server error: {str(exc)}"}
@@ -944,7 +908,7 @@ async def general_exception_handler(request, exc):
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("🚀 Starting CB7 Meeting Processor Server")
+    logger.info("🚀 Starting CB Meeting Processor Server")
     logger.info("📊 Server will be available at: http://localhost:8000")
     logger.info("🔍 Health check: http://localhost:8000/health")
     logger.info("📚 API docs: http://localhost:8000/docs")
@@ -954,11 +918,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         log_level="info",
-        reload=False  # Set to True for development
+        reload=False
     )
-
-
-def check_for_new_meetings():
-    # Implementation would go here
-    # This would check YouTube, identify new meetings, and process them
-    pass
