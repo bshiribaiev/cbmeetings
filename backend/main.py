@@ -4,7 +4,7 @@ import json
 import sqlite3
 import time
 import logging
-from datetime import datetime
+import datetime
 from pathlib import Path
 from typing import List, Dict
 import subprocess
@@ -19,6 +19,8 @@ from enhanced_analyzer import EnhancedCBAnalyzer, VoteRecord
 from audio_utils import chunk_on_silence
 from diarize import transcribe_whisper
 from cleanup import clean_transcript
+from summarize import summarize_transcript
+from render_md import md_from_summary
 
 # AI and processing imports
 # import whisper
@@ -300,6 +302,11 @@ class CBProcessor:
         transcript = " ".join(seg_df.text.tolist())
         # optional: low_df.to_csv("review_needed.csv", index=False)
         return transcript
+    
+    def summarize_with_gemini(self, transcript: str, meeting_date: str):
+        summary_obj = summarize_transcript(transcript, meeting_date)
+        summary_md  = md_from_summary(summary_obj)
+        return summary_obj, summary_md
 
     def analyze_with_gemini(self, transcript: str, title: str = None) -> Dict:
         try:
@@ -550,48 +557,19 @@ class CBProcessor:
             logger.warning(f"Transcript formatting failed: {e}")
             return transcript.replace('. ', '.\n\n')
 
-    def generate_summary_file(self, video_id: str, title: str, analysis: Dict):
+    def generate_summary_file(self, video_id: str, title: str, markdown: str) -> Path:
+        """
+        Save a pre-rendered Markdown summary to disk and return its Path.
+        """
         try:
             summary_file = output_dir / f"{video_id}_summary.md"
-
-            with open(summary_file, 'w', encoding='utf-8') as f:
-                f.write(f"# {title}\n\n")
-                f.write(f"**Processed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"**Video ID:** {video_id}\n\n")
-
-                f.write(f"## Summary\n{analysis.get('summary', 'No summary available')}\n\n")
-
-                if analysis.get('keyDecisions'):
-                    f.write("## Key Decisions\n")
-                    for decision in analysis['keyDecisions']:
-                        f.write(f"- **{decision.get('item', 'Unknown')}**: {decision.get('outcome', 'Unknown')} ({decision.get('vote', 'No vote recorded')})\n")
-                        if decision.get('details'):
-                            f.write(f"  - {decision['details']}\n")
-                    f.write("\n")
-
-                if analysis.get('publicConcerns'):
-                    f.write("## Community Concerns\n")
-                    for concern in analysis['publicConcerns']:
-                        f.write(f"- {concern}\n")
-                    f.write("\n")
-
-                if analysis.get('nextSteps'):
-                    f.write("## Next Steps\n")
-                    for step in analysis['nextSteps']:
-                        f.write(f"- {step}\n")
-                    f.write("\n")
-
-                if analysis.get('mainTopics'):
-                    f.write("## Main Topics\n")
-                    f.write(f"{', '.join(analysis['mainTopics'])}\n\n")
-
-                f.write(f"**Meeting Sentiment:** {analysis.get('sentiment', 'Unknown')}\n")
-                f.write(f"**Attendance:** {analysis.get('attendance', 'Not specified')}\n")
-
+            with open(summary_file, "w", encoding="utf-8") as f:
+                f.write(markdown)
             logger.info(f"Summary file saved: {summary_file}")
-
+            return summary_file
         except Exception as e:
             logger.error(f"Failed to generate summary file: {e}")
+            raise
 
 # Initialize processor
 processor = CBProcessor()
@@ -671,22 +649,25 @@ async def process_youtube_video(request: ProcessRequest):
 
                 # Step 3: Analyze
                 logger.info("Analyzing transcript with Gemini...")
-                analysis = processor.analyze_with_gemini(transcript, title=title)
+                summary_obj, summary_md = processor.summarize_with_gemini(
+                    transcript,
+                    meeting_date=datetime.date.today().isoformat()
+)
 
                 # Calculate processing time
+                summary_json = summary_obj.model_dump(mode="json")
                 processing_time = time.time() - start_time
 
-                # Step 4: Save results
-                processor.save_analysis(video_id, analysis, transcript, processing_time, method="enhanced")
-                processor.generate_summary_file(video_id, title, analysis)
-
-                logger.info(f"Processing completed in {processing_time:.1f} seconds")
-
+                # Step 4: Persist & render
+                processor.save_analysis(video_id, summary_json, transcript,
+                                        processing_time, method="gemini-summary")
+                processor.generate_summary_file(video_id, title, summary_md)
                 return {
                     "success": True,
                     "video_id": video_id,
                     "title": title,
-                    "analysis": analysis,
+                    "summary_json": summary_json,
+                    "summary_markdown": summary_md,
                     "processingTime": f"{processing_time:.1f} seconds",
                     "transcriptLength": len(transcript),
                     "wordCount": len(transcript.split())
@@ -736,22 +717,25 @@ async def process_uploaded_file(file: UploadFile = File(...)):
             processor.save_full_transcript(video_id, transcript)
 
             # Analyze
-            analysis = processor.analyze_with_gemini(transcript, title=file.filename)
+            summary_obj, summary_md = processor.summarize_with_gemini(
+                    transcript,
+                    meeting_date=datetime.date.today().isoformat()
+)
 
-            # Calculate processing time
+                # Calculate processing time
+            summary_json = summary_obj.model_dump(mode="json")
             processing_time = time.time() - start_time
 
-            # Save results
-            processor.save_analysis(video_id, analysis, transcript, processing_time, method="enhanced")
-            processor.generate_summary_file(video_id, file.filename, analysis)
-            
-            logger.info(f"File processing completed in {processing_time:.1f} seconds")
-
+            # Step 4: Persist & render
+            processor.save_analysis(video_id, summary_json, transcript,
+                                    processing_time, method="gemini-summary")
+            processor.generate_summary_file(video_id, file.filename, summary_md)
             return {
                 "success": True,
                 "video_id": video_id,
                 "title": file.filename,
-                "analysis": analysis,
+                "summary_json": summary_json,
+                "summary_markdown": summary_md,
                 "processingTime": f"{processing_time:.1f} seconds",
                 "transcriptLength": len(transcript),
                 "wordCount": len(transcript.split())
