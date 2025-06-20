@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, FileText, Brain, CheckCircle, AlertCircle, Loader, Computer, Zap, Shield, Calendar, Users, MessageSquare, TrendingUp } from 'lucide-react';
+import { Upload, Play, Brain, CheckCircle, AlertCircle, Loader, Computer, Zap, Calendar, Users, MessageSquare, TrendingUp } from 'lucide-react';
 import './App.css';
 
 interface ProcessingStep {
@@ -270,19 +270,9 @@ const App = () => {
             
             <div className="header-stats">
               <div className="stat-card">
-                <Shield size={24} style={{color: '#48bb78', margin: '0 auto 0.5rem'}} />
-                <div className="stat-number">100% Private</div>
-                <div className="stat-label">Processed Locally</div>
-              </div>
-              <div className="stat-card">
                 <Zap size={24} style={{color: '#4299e1', margin: '0 auto 0.5rem'}} />
                 <div className="stat-number">{analysis.processingTime}</div>
                 <div className="stat-label">Processing Time</div>
-              </div>
-              <div className="stat-card">
-                <FileText size={24} style={{color: '#805ad5', margin: '0 auto 0.5rem'}} />
-                <div className="stat-number">$0.00</div>
-                <div className="stat-label">Processing Cost</div>
               </div>
               <div className="stat-card">
                 <MessageSquare size={24} style={{color: '#ed8936', margin: '0 auto 0.5rem'}} />

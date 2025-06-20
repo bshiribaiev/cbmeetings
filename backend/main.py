@@ -15,7 +15,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from chunked_analyzer import ChunkedCBAnalyzer
+from enhanced_analyzer import EnhancedCBAnalyzer, VoteRecord
 
 # AI and processing imports
 import whisper
@@ -169,7 +169,7 @@ class CBProcessor:
                     logger.info(f"📋 Available Ollama models: {available_models}")
                     
                     if not available_models:
-                        logger.warning("⚠️ No Ollama models found. Run: ollama pull llama3:latest")
+                        logger.warning("⚠️ No Ollama models found. Run: ollama pull llama3.1:latest")
                     else:
                         logger.info("✅ Ollama connection successful")
                         
@@ -357,7 +357,7 @@ class CBProcessor:
             logger.error(f"❌ Transcription failed: {e}")
             raise Exception(f"Transcription failed: {str(e)}")
 
-    def analyze_with_ollama(self, transcript: str) -> Dict:
+    def analyze_with_ollama(self, transcript: str, title: str = None) -> Dict:
         """Enhanced analysis with chunked processing for long transcripts"""
         if not OLLAMA_AVAILABLE:
             logger.info("🔄 Ollama not available, using keyword analysis")
@@ -372,10 +372,10 @@ class CBProcessor:
             # Choose analyzer based on transcript length
             if transcript_length > 15000 or word_count > 3000:
                 logger.info("📄 Using chunked analyzer for long transcript")
-                analyzer = ChunkedCBAnalyzer()
+                analyzer = EnhancedCBAnalyzer()
             else:
                 logger.info("📄 Using standard analyzer for shorter transcript")
-                analyzer = ChunkedCBAnalyzer()
+                analyzer = EnhancedCBAnalyzer()
 
             # Get available models
             try:
@@ -388,7 +388,7 @@ class CBProcessor:
 
             # Choose best available model
             preferred_models = ['llama3:latest', 'llama3', 'llama3.1:latest', 'llama3.1']
-            selected_model = 'llama3:latest'
+            selected_model = 'llama3.1:latest'
 
             for preferred in preferred_models:
                 if any(preferred in available for available in available_models):
@@ -399,7 +399,7 @@ class CBProcessor:
             logger.info(f"🎯 Using model: {selected_model}")
 
             # Perform analysis
-            result = analyzer.analyze_cb_meeting(transcript, selected_model)
+            result = analyzer.analyze_cb_meeting(transcript, selected_model, title=title)
 
             # Validate and enhance result
             if self.validate_analysis_result(result):
@@ -765,13 +765,13 @@ async def process_youtube_video(request: ProcessRequest):
 
                 # Step 3: Analyze
                 logger.info("🧠 Analyzing transcript...")
-                analysis = processor.analyze_with_ollama(transcript)
+                analysis = processor.analyze_with_ollama(transcript, title=title)
 
                 # Calculate processing time
                 processing_time = time.time() - start_time
 
                 # Step 4: Save results
-                processor.save_analysis(video_id, analysis, transcript, processing_time, "enhanced")
+                processor.save_analysis(video_id, analysis, transcript, processing_time, method="enhanced")
                 processor.generate_summary_file(video_id, title, analysis)
 
                 logger.info(f"✅ Processing completed in {processing_time:.1f} seconds")
@@ -830,13 +830,13 @@ async def process_uploaded_file(file: UploadFile = File(...)):
             processor.save_full_transcript(video_id, transcript)
 
             # Step 3: Analyze
-            analysis = processor.analyze_with_ollama(transcript)
+            analysis = processor.analyze_with_ollama(transcript, title=file.filename)
 
             # Calculate processing time
             processing_time = time.time() - start_time
 
             # Step 4: Save results
-            processor.save_analysis(video_id, analysis, transcript, processing_time, "enhanced")
+            processor.save_analysis(video_id, analysis, transcript, processing_time, method="enhanced")
             processor.generate_summary_file(video_id, file.filename, analysis)
 
             logger.info(f"✅ File processing completed in {processing_time:.1f} seconds")
@@ -894,6 +894,56 @@ async def get_processed_meetings():
 
     except Exception as e:
         logger.error(f"❌ Failed to get meetings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/analyze-transcript/{video_id}")
+async def analyze_existing_transcript(video_id: str):
+    """Re-analyze an existing transcript with enhanced analyzer"""
+    try:
+        # Load transcript from file
+        transcript_file = output_dir / f"{video_id}_transcript.txt"
+        if not transcript_file.exists():
+            raise HTTPException(status_code=404, detail="Transcript not found")
+        
+        with open(transcript_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            # Skip header if present
+            if '============' in content:
+                lines = content.split('\n')
+                for i, line in enumerate(lines):
+                    if '============' in line and i < len(lines) - 1:
+                        content = '\n'.join(lines[i + 1:])
+                        break
+        
+        # First, import the VoteRecord class at the top of main.py if needed:
+        # from enhanced_analyzer import VoteRecord
+        
+        # Use enhanced analyzer
+        analyzer = EnhancedCBAnalyzer()  # This will use your enhanced analyzer if you've updated the import
+        
+        # Quick analysis without full AI processing
+        vote_records = analyzer.extract_all_votes(content)
+        
+        # Convert to response format
+        decisions = []
+        for vote in vote_records:
+            decisions.append({
+                "item": vote.item,
+                "outcome": vote.outcome,
+                "vote": vote.vote_count,
+                "type": vote.vote_type,
+                "confidence": vote.confidence
+            })
+        
+        return {
+            "video_id": video_id,
+            "vote_count": len(decisions),
+            "decisions": decisions,
+            "transcript_length": len(content)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to analyze transcript: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.exception_handler(Exception)
