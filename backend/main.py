@@ -21,14 +21,6 @@ from enhanced_analyzer import EnhancedCBAnalyzer, VoteRecord
 import whisper
 import yt_dlp
 
-# Optional imports with fallbacks
-try:
-    import ollama
-    OLLAMA_AVAILABLE = True
-except ImportError:
-    OLLAMA_AVAILABLE = False
-    print("Ollama not available - will use basic analysis")
-
 # Configure logging with more detailed format
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +30,7 @@ logging.basicConfig(
         logging.FileHandler('cb_processor.log')
     ]
 )
+
 logger = logging.getLogger(__name__)
 
 # Pydantic models
@@ -147,39 +140,22 @@ class CBProcessor:
 
             conn.commit()
             conn.close()
-            logger.info("✅ Database initialized successfully")
+            logger.info("Database initialized successfully")
 
         except Exception as e:
-            logger.error(f"❌ Database initialization failed: {e}")
+            logger.error(f"Database initialization failed: {e}")
             raise
 
     def load_models(self):
         global whisper_model
 
         try:
-            logger.info("🔄 Loading Whisper model...")
+            logger.info("Loading Whisper model...")
             whisper_model = whisper.load_model("medium")
-            logger.info("✅ Whisper model loaded successfully")
-
-            # Test Ollama if available
-            if OLLAMA_AVAILABLE:
-                try:
-                    models = ollama.list()
-                    available_models = [model['name'] for model in models.get('models', [])]
-                    logger.info(f"📋 Available Ollama models: {available_models}")
-                    
-                    if not available_models:
-                        logger.warning("⚠️ No Ollama models found. Run: ollama pull llama3.1:latest")
-                    else:
-                        logger.info("✅ Ollama connection successful")
-                        
-                except Exception as e:
-                    logger.warning(f"⚠️ Ollama connection issue: {e}")
-            else:
-                logger.warning("⚠️ Ollama not available")
+            logger.info("Whisper model loaded successfully")
 
         except Exception as e:
-            logger.error(f"❌ Model loading failed: {e}")
+            logger.error(f"Model loading failed: {e}")
             raise
 
     def check_ffmpeg(self) -> bool:
@@ -214,7 +190,7 @@ class CBProcessor:
                 }
 
         except Exception as e:
-            logger.error(f"❌ Failed to extract video info: {e}")
+            logger.error(f"Failed to extract video info: {e}")
             raise HTTPException(status_code=400, detail=f"Failed to extract video info: {str(e)}")
 
     def is_meeting_video(self, title: str, description: str = "") -> bool:
@@ -251,7 +227,7 @@ class CBProcessor:
                 # Find the downloaded audio file
                 for file in Path(output_path).glob("audio.*"):
                     if file.suffix in ['.mp3', '.m4a', '.webm']:
-                        logger.info(f"✅ Audio extracted: {file}")
+                        logger.info(f"Audio extracted: {file}")
                         return str(file), title
 
             raise Exception("No audio file found after extraction")
@@ -260,7 +236,7 @@ class CBProcessor:
             error_msg = str(e)
             if "ffmpeg" in error_msg.lower():
                 error_msg += "\n\nFix: Install ffmpeg with 'brew install ffmpeg' (Mac) or visit https://ffmpeg.org"
-            logger.error(f"❌ Audio extraction failed: {error_msg}")
+            logger.error(f"Audio extraction failed: {error_msg}")
             raise Exception(error_msg)
 
     def extract_audio_from_file(self, file_path: str, output_path: str) -> str:
@@ -271,7 +247,7 @@ class CBProcessor:
             # If it's already an audio file, just copy it
             if file_path.suffix.lower() in ['.mp3', '.wav', '.m4a', '.flac']:
                 shutil.copy2(file_path, output_file)
-                logger.info(f"✅ Audio file copied: {output_file}")
+                logger.info(f"Audio file copied: {output_file}")
                 return str(output_file)
 
             # Extract audio from video file using ffmpeg
@@ -286,11 +262,11 @@ class CBProcessor:
             if result.returncode != 0:
                 raise Exception(f"FFmpeg failed: {result.stderr}")
 
-            logger.info(f"✅ Audio extracted from video: {output_file}")
+            logger.info(f"Audio extracted from video: {output_file}")
             return str(output_file)
 
         except Exception as e:
-            logger.error(f"❌ Audio extraction from file failed: {e}")
+            logger.error(f"Audio extraction from file failed: {e}")
             raise Exception(f"Audio extraction failed: {str(e)}")
 
     def optimize_audio_for_transcription(self, audio_path: str) -> str:
@@ -314,14 +290,14 @@ class CBProcessor:
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0 and Path(output_path).exists():
-                logger.info("✅ Audio optimized for better transcription")
+                logger.info("Audio optimized for better transcription")
                 return output_path
             else:
-                logger.warning("⚠️ Audio optimization failed, using original")
+                logger.warning("Audio optimization failed, using original")
                 return audio_path
 
         except Exception as e:
-            logger.warning(f"⚠️ Audio optimization failed: {e}")
+            logger.warning(f"Audio optimization failed: {e}")
             return audio_path
 
     def transcribe_audio(self, audio_path: str) -> str:
@@ -330,7 +306,7 @@ class CBProcessor:
                 raise Exception("Whisper model not loaded")
 
             optimized_path = self.optimize_audio_for_transcription(audio_path)
-            logger.info(f"🎙️ Transcribing audio: {optimized_path}")
+            logger.info(f"Transcribing audio: {optimized_path}")
 
             # Transcribe with Whisper
             result = whisper_model.transcribe(
@@ -350,20 +326,19 @@ class CBProcessor:
             transcript = result["text"].strip()
             word_count = len(transcript.split())
 
-            logger.info(f"✅ Transcription complete: {word_count:,} words")
+            logger.info(f"Transcription complete: {word_count:,} words")
             return transcript
 
         except Exception as e:
-            logger.error(f"❌ Transcription failed: {e}")
+            logger.error(f"Transcription failed: {e}")
             raise Exception(f"Transcription failed: {str(e)}")
 
     def analyze_with_gemini(self, transcript: str, title: str = None) -> Dict:
-        """Analyze transcript using Gemini AI"""
         try:
             transcript_length = len(transcript)
             word_count = len(transcript.split())
             
-            logger.info(f"🧠 Analyzing transcript with Gemini: {transcript_length:,} chars, {word_count:,} words")
+            logger.info(f"Analyzing transcript with Gemini: {transcript_length:,} chars, {word_count:,} words")
             
             # Use enhanced analyzer with Gemini
             analyzer = EnhancedCBAnalyzer()
@@ -373,7 +348,7 @@ class CBProcessor:
             
             # Validate and enhance result
             if self.validate_analysis_result(result):
-                logger.info("✅ Gemini analysis completed successfully")
+                logger.info("Gemini analysis completed successfully")
                 # Add metadata
                 if '_metadata' not in result:
                     result['_metadata'] = {}
@@ -385,16 +360,15 @@ class CBProcessor:
                 })
                 return result
             else:
-                logger.warning("⚠️ Gemini analysis validation failed, using fallback")
+                logger.warning("Gemini analysis validation failed, using fallback")
                 return self.create_enhanced_analysis(transcript)
 
         except Exception as e:
-            logger.error(f"❌ Gemini analysis failed: {e}")
+            logger.error(f"Gemini analysis failed: {e}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return self.create_enhanced_analysis(transcript)
 
     def validate_analysis_result(self, result: Dict) -> bool:
-        """Enhanced validation for chunked analysis results"""
         if not isinstance(result, dict):
             return False
 
@@ -417,14 +391,13 @@ class CBProcessor:
             decisions = len(result.get('keyDecisions', []))
             concerns = len(result.get('publicConcerns', []))
             topics = len(result.get('mainTopics', []))
-            logger.info(f"✅ Validation passed: {decisions} decisions, {concerns} concerns, {topics} topics")
+            logger.info(f"Validation passed: {decisions} decisions, {concerns} concerns, {topics} topics")
         else:
-            logger.warning("⚠️ Validation failed: insufficient content")
+            logger.warning("Validation failed: insufficient content")
 
         return has_content
 
     def create_enhanced_analysis(self, transcript: str) -> Dict:
-        """Create enhanced keyword-based analysis"""
         words = transcript.lower().split()
         word_count = len(words)
 
@@ -527,10 +500,10 @@ class CBProcessor:
 
             conn.commit()
             conn.close()
-            logger.info(f"✅ Analysis saved for video: {video_id}")
+            logger.info(f"Analysis saved for video: {video_id}")
 
         except Exception as e:
-            logger.error(f"❌ Failed to save analysis: {e}")
+            logger.error(f"Failed to save analysis: {e}")
 
     def save_full_transcript(self, video_id: str, transcript: str):
         try:
@@ -560,10 +533,10 @@ class CBProcessor:
             conn.commit()
             conn.close()
 
-            logger.info(f"✅ Full transcript saved for {video_id}")
+            logger.info(f"Full transcript saved for {video_id}")
 
         except Exception as e:
-            logger.error(f"❌ Failed to save transcript: {e}")
+            logger.error(f"Failed to save transcript: {e}")
 
     def format_transcript_for_readability(self, transcript: str) -> str:
         try:
@@ -606,7 +579,7 @@ class CBProcessor:
             return formatted
             
         except Exception as e:
-            logger.warning(f"⚠️ Transcript formatting failed: {e}")
+            logger.warning(f"Transcript formatting failed: {e}")
             return transcript.replace('. ', '.\n\n')
 
     def generate_summary_file(self, video_id: str, title: str, analysis: Dict):
@@ -647,10 +620,10 @@ class CBProcessor:
                 f.write(f"**Meeting Sentiment:** {analysis.get('sentiment', 'Unknown')}\n")
                 f.write(f"**Attendance:** {analysis.get('attendance', 'Not specified')}\n")
 
-            logger.info(f"✅ Summary file saved: {summary_file}")
+            logger.info(f"Summary file saved: {summary_file}")
 
         except Exception as e:
-            logger.error(f"❌ Failed to generate summary file: {e}")
+            logger.error(f"Failed to generate summary file: {e}")
 
 # Initialize processor
 processor = CBProcessor()
@@ -658,8 +631,8 @@ processor = CBProcessor()
 # API Endpoints
 @app.on_event("startup")
 async def startup_event():
-    logger.info("🚀 CB Meeting Processor starting up...")
-    logger.info("✅ Server ready for processing requests")
+    logger.info("CB Meeting Processor starting up...")
+    logger.info("Server ready for processing requests")
 
 @app.get("/")
 async def root():
@@ -688,13 +661,6 @@ async def health_check():
 
     ollama_status = False
     ollama_models = []
-    if OLLAMA_AVAILABLE:
-        try:
-            models = ollama.list()
-            ollama_models = [model['name'] for model in models.get('models', [])]
-            ollama_status = True
-        except:
-            ollama_status = False
 
     status = HealthStatus(
         whisper=whisper_model is not None,
@@ -712,7 +678,7 @@ async def process_youtube_video(request: ProcessRequest):
     start_time = time.time()
 
     try:
-        logger.info(f"🎬 Processing YouTube video: {request.url}")
+        logger.info(f"Processing YouTube video: {request.url}")
 
         # Extract video info
         video_info = processor.extract_video_info(request.url)
@@ -721,22 +687,22 @@ async def process_youtube_video(request: ProcessRequest):
 
         # Check if it looks like a meeting
         if not processor.is_meeting_video(title, video_info.get('description', '')):
-            logger.warning(f"⚠️ Video may not be a meeting: {title}")
+            logger.warning(f"Video may not be a meeting: {title}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 # Step 1: Extract audio
-                logger.info("🎵 Extracting audio...")
+                logger.info("Extracting audio...")
                 audio_path, extracted_title = processor.extract_audio_from_youtube(
                     request.url, temp_dir)
 
                 # Step 2: Transcribe
-                logger.info("🎙️ Transcribing audio...")
+                logger.info("Transcribing audio...")
                 transcript = processor.transcribe_audio(audio_path)
                 processor.save_full_transcript(video_id, transcript)
 
                 # Step 3: Analyze
-                logger.info("🧠 Analyzing transcript with Gemini...")
+                logger.info("Analyzing transcript with Gemini...")
                 analysis = processor.analyze_with_gemini(transcript, title=title)
 
                 # Calculate processing time
@@ -746,7 +712,7 @@ async def process_youtube_video(request: ProcessRequest):
                 processor.save_analysis(video_id, analysis, transcript, processing_time, method="enhanced")
                 processor.generate_summary_file(video_id, title, analysis)
 
-                logger.info(f"✅ Processing completed in {processing_time:.1f} seconds")
+                logger.info(f"Processing completed in {processing_time:.1f} seconds")
 
                 return {
                     "success": True,
@@ -759,12 +725,12 @@ async def process_youtube_video(request: ProcessRequest):
                 }
 
             except Exception as e:
-                logger.error(f"❌ Processing error: {e}")
+                logger.error(f"Processing error: {e}")
                 logger.error(f"Full traceback: {traceback.format_exc()}")
                 raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
     except Exception as e:
-        logger.error(f"❌ YouTube processing failed: {e}")
+        logger.error(f"YouTube processing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/process-file")
@@ -772,7 +738,7 @@ async def process_uploaded_file(file: UploadFile = File(...)):
     start_time = time.time()
 
     try:
-        logger.info(f"📁 Processing uploaded file: {file.filename}")
+        logger.info(f"Processing uploaded file: {file.filename}")
 
         # Validate file type
         if not file.content_type or not (
@@ -789,29 +755,29 @@ async def process_uploaded_file(file: UploadFile = File(...)):
                 content = await file.read()
                 buffer.write(content)
 
-            logger.info(f"📁 File saved: {file_path} ({len(content)} bytes)")
+            logger.info(f"File saved: {file_path} ({len(content)} bytes)")
 
-            # Step 1: Extract audio
+            # Extract audio
             audio_path = processor.extract_audio_from_file(str(file_path), temp_dir)
 
-            # Step 2: Transcribe
+            # Transcribe
             transcript = processor.transcribe_audio(audio_path)
 
             # Generate a video ID for the file
             video_id = f"file_{int(start_time)}"
             processor.save_full_transcript(video_id, transcript)
 
-            # Step 3: Analyze
+            # Analyze
             analysis = processor.analyze_with_gemini(transcript, title=file.filename)
 
             # Calculate processing time
             processing_time = time.time() - start_time
 
-            # Step 4: Save results
+            # Save results
             processor.save_analysis(video_id, analysis, transcript, processing_time, method="enhanced")
             processor.generate_summary_file(video_id, file.filename, analysis)
-
-            logger.info(f"✅ File processing completed in {processing_time:.1f} seconds")
+            
+            logger.info(f"File processing completed in {processing_time:.1f} seconds")
 
             return {
                 "success": True,
@@ -824,7 +790,7 @@ async def process_uploaded_file(file: UploadFile = File(...)):
             }
 
     except Exception as e:
-        logger.error(f"❌ File processing failed: {e}")
+        logger.error(f"File processing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/meetings")
@@ -865,12 +831,11 @@ async def get_processed_meetings():
         return {"meetings": meetings}
 
     except Exception as e:
-        logger.error(f"❌ Failed to get meetings: {e}")
+        logger.error(f"Failed to get meetings: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/analyze-transcript/{video_id}")
 async def analyze_existing_transcript(video_id: str):
-    """Re-analyze an existing transcript with enhanced analyzer"""
     try:
         # Load transcript from file
         transcript_file = output_dir / f"{video_id}_transcript.txt"
@@ -879,6 +844,7 @@ async def analyze_existing_transcript(video_id: str):
         
         with open(transcript_file, 'r', encoding='utf-8') as f:
             content = f.read()
+            
             # Skip header if present
             if '============' in content:
                 lines = content.split('\n')
@@ -886,12 +852,9 @@ async def analyze_existing_transcript(video_id: str):
                     if '============' in line and i < len(lines) - 1:
                         content = '\n'.join(lines[i + 1:])
                         break
-        
-        # First, import the VoteRecord class at the top of main.py if needed:
-        # from enhanced_analyzer import VoteRecord
-        
-        # Use enhanced analyzer
-        analyzer = EnhancedCBAnalyzer()  # This will use your enhanced analyzer if you've updated the import
+    
+        # Enhanced analyzer
+        analyzer = EnhancedCBAnalyzer()  
         
         # Quick analysis without full AI processing
         vote_records = analyzer.extract_all_votes(content)
@@ -920,7 +883,7 @@ async def analyze_existing_transcript(video_id: str):
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
-    logger.error(f"❌ Unhandled exception: {exc}")
+    logger.error(f"Unhandled exception: {exc}")
     logger.error(f"Full traceback: {traceback.format_exc()}")
     return JSONResponse(
         status_code=500,
@@ -930,10 +893,10 @@ async def general_exception_handler(request, exc):
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("🚀 Starting CB Meeting Processor Server")
-    logger.info("📊 Server will be available at: http://localhost:8000")
-    logger.info("🔍 Health check: http://localhost:8000/health")
-    logger.info("📚 API docs: http://localhost:8000/docs")
+    logger.info("Starting CB Meeting Processor Server")
+    logger.info("Server will be available at: http://localhost:8000")
+    logger.info("Health check: http://localhost:8000/health")
+    logger.info("API docs: http://localhost:8000/docs")
 
     uvicorn.run(
         app,
