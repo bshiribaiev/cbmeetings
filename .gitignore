@@ -25,4 +25,7 @@ dist-ssr
 
 backend/venv/
 backend/processed_meetings
-backend
+backend/__pycache__
+backend/cb_processor.log
+
+
