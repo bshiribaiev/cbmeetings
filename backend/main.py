@@ -16,9 +16,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from enhanced_analyzer import EnhancedCBAnalyzer, VoteRecord
+from audio_utils import chunk_on_silence
+from diarize import transcribe_whisper
+from cleanup import clean_transcript
 
 # AI and processing imports
-import whisper
+# import whisper
 import yt_dlp
 
 # Configure logging with more detailed format
@@ -90,7 +93,6 @@ class CBProcessor:
     def __init__(self):
         self.setup_directories()
         self.init_database()
-        self.load_models()
 
     def setup_directories(self):
         output_dir.mkdir(exist_ok=True)
@@ -144,18 +146,6 @@ class CBProcessor:
 
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
-            raise
-
-    def load_models(self):
-        global whisper_model
-
-        try:
-            logger.info("Loading Whisper model...")
-            whisper_model = whisper.load_model("medium")
-            logger.info("Whisper model loaded successfully")
-
-        except Exception as e:
-            logger.error(f"Model loading failed: {e}")
             raise
 
     def check_ffmpeg(self) -> bool:
@@ -301,37 +291,15 @@ class CBProcessor:
             return audio_path
 
     def transcribe_audio(self, audio_path: str) -> str:
-        try:
-            if not whisper_model:
-                raise Exception("Whisper model not loaded")
+        segments = chunk_on_silence(Path(audio_path))
+        merged = {"segments": []}
+        for seg in segments:
+            merged["segments"].extend(transcribe_whisper(seg)["segments"])
 
-            optimized_path = self.optimize_audio_for_transcription(audio_path)
-            logger.info(f"Transcribing audio: {optimized_path}")
-
-            # Transcribe with Whisper
-            result = whisper_model.transcribe(
-                optimized_path,
-                language="en",
-                task="transcribe",
-                temperature=0.0,
-                fp16=False,
-                verbose=False,
-                word_timestamps=False,
-                condition_on_previous_text=False,
-                compression_ratio_threshold=2.4,
-                logprob_threshold=-1.0,
-                no_speech_threshold=0.6,
-            )
-
-            transcript = result["text"].strip()
-            word_count = len(transcript.split())
-
-            logger.info(f"Transcription complete: {word_count:,} words")
-            return transcript
-
-        except Exception as e:
-            logger.error(f"Transcription failed: {e}")
-            raise Exception(f"Transcription failed: {str(e)}")
+        seg_df, low_df = clean_transcript(merged)
+        transcript = " ".join(seg_df.text.tolist())
+        # optional: low_df.to_csv("review_needed.csv", index=False)
+        return transcript
 
     def analyze_with_gemini(self, transcript: str, title: str = None) -> Dict:
         try:
@@ -663,7 +631,7 @@ async def health_check():
     ollama_models = []
 
     status = HealthStatus(
-        whisper=whisper_model is not None,
+        whisper=True,
         ollama=ollama_status,
         ffmpeg=processor.check_ffmpeg(),
         yt_dlp=True,
