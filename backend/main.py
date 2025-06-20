@@ -357,67 +357,39 @@ class CBProcessor:
             logger.error(f"❌ Transcription failed: {e}")
             raise Exception(f"Transcription failed: {str(e)}")
 
-    def analyze_with_ollama(self, transcript: str, title: str = None) -> Dict:
-        """Enhanced analysis with chunked processing for long transcripts"""
-        if not OLLAMA_AVAILABLE:
-            logger.info("🔄 Ollama not available, using keyword analysis")
-            return self.create_enhanced_analysis(transcript)
-
+    def analyze_with_gemini(self, transcript: str, title: str = None) -> Dict:
+        """Analyze transcript using Gemini AI"""
         try:
             transcript_length = len(transcript)
             word_count = len(transcript.split())
             
-            logger.info(f"🧠 Analyzing transcript: {transcript_length:,} chars, {word_count:,} words")
+            logger.info(f"🧠 Analyzing transcript with Gemini: {transcript_length:,} chars, {word_count:,} words")
             
-            # Choose analyzer based on transcript length
-            if transcript_length > 15000 or word_count > 3000:
-                logger.info("📄 Using chunked analyzer for long transcript")
-                analyzer = EnhancedCBAnalyzer()
-            else:
-                logger.info("📄 Using standard analyzer for shorter transcript")
-                analyzer = EnhancedCBAnalyzer()
-
-            # Get available models
-            try:
-                models = ollama.list()
-                available_models = [model.get('name', '') for model in models.get('models', [])]
-                logger.info(f"📋 Available models: {available_models}")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not get model list: {e}")
-                available_models = ['llama3:latest']
-
-            # Choose best available model
-            preferred_models = ['llama3:latest', 'llama3', 'llama3.1:latest', 'llama3.1']
-            selected_model = 'llama3.1:latest'
-
-            for preferred in preferred_models:
-                if any(preferred in available for available in available_models):
-                    selected_model = next(
-                        available for available in available_models if preferred in available)
-                    break
-
-            logger.info(f"🎯 Using model: {selected_model}")
-
-            # Perform analysis
-            result = analyzer.analyze_cb_meeting(transcript, selected_model, title=title)
-
+            # Use enhanced analyzer with Gemini
+            analyzer = EnhancedCBAnalyzer()
+            
+            # Perform analysis with Gemini (model parameter is ignored as Gemini is configured in the analyzer)
+            result = analyzer.analyze_cb_meeting(transcript, model='gemini', title=title)
+            
             # Validate and enhance result
             if self.validate_analysis_result(result):
-                logger.info("✅ Analysis completed successfully")
+                logger.info("✅ Gemini analysis completed successfully")
                 # Add metadata
-                result['_metadata'] = {
+                if '_metadata' not in result:
+                    result['_metadata'] = {}
+                result['_metadata'].update({
                     'transcript_length': transcript_length,
                     'word_count': word_count,
-                    'analysis_method': 'chunked' if transcript_length > 15000 else 'standard',
-                    'model_used': selected_model
-                }
+                    'analysis_method': 'enhanced-gemini',
+                    'model_used': 'gemini-1.5-flash'
+                })
                 return result
             else:
-                logger.warning("⚠️ Analysis validation failed, using fallback")
+                logger.warning("⚠️ Gemini analysis validation failed, using fallback")
                 return self.create_enhanced_analysis(transcript)
 
         except Exception as e:
-            logger.error(f"❌ Analysis failed: {e}")
+            logger.error(f"❌ Gemini analysis failed: {e}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return self.create_enhanced_analysis(transcript)
 
@@ -764,8 +736,8 @@ async def process_youtube_video(request: ProcessRequest):
                 processor.save_full_transcript(video_id, transcript)
 
                 # Step 3: Analyze
-                logger.info("🧠 Analyzing transcript...")
-                analysis = processor.analyze_with_ollama(transcript, title=title)
+                logger.info("🧠 Analyzing transcript with Gemini...")
+                analysis = processor.analyze_with_gemini(transcript, title=title)
 
                 # Calculate processing time
                 processing_time = time.time() - start_time
@@ -830,7 +802,7 @@ async def process_uploaded_file(file: UploadFile = File(...)):
             processor.save_full_transcript(video_id, transcript)
 
             # Step 3: Analyze
-            analysis = processor.analyze_with_ollama(transcript, title=file.filename)
+            analysis = processor.analyze_with_gemini(transcript, title=file.filename)
 
             # Calculate processing time
             processing_time = time.time() - start_time
