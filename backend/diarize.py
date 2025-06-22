@@ -3,6 +3,7 @@ from pathlib import Path
 import sys, time, os
 from pydub import AudioSegment      # for quick duration probe
 from audio_utils import chunk_on_silence
+import tempfile, os
 
 model = WhisperModel(
     "large-v3",
@@ -25,21 +26,30 @@ def make_progress_bar(total_audio_sec: float):
         sys.stderr.flush()
     return _cb
 
-def transcribe_batch(paths: list[str], callback):
-    """Decode 20-30 clips in one model call."""
-    results = model.transcribe_batch(
-        paths,
-        language="en",
-        vad_filter=False,
-        beam_size=1, best_of=1,
-        temperature=0.2,
-        max_segment_length=30,
+def transcribe_merged(bucket_paths, callback):
+    """Concatenate 10–30 short chunks, run a single transcribe call."""
+    if len(bucket_paths) == 1:
+        return model.transcribe(
+            bucket_paths[0],
+            language="en",
+            vad_filter=False,
+            beam_size=1, best_of=1,
+            temperature=0.2,
+            callback=callback,
+        )[0]                        # returns (segments, info)
+
+    # merge into a temp WAV
+    merged = sum((AudioSegment.from_file(p) for p in bucket_paths))
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        merged.export(tmp.name, format="wav")
+    segs, _ = model.transcribe(
+        tmp.name,
+        language="en", vad_filter=False,
+        beam_size=1, best_of=1, temperature=0.2,
         callback=callback,
     )
-    merged = []
-    for segs, _ in results:          # segs is the list of Segment objects
-        merged.extend(segs)
-    return merged
+    os.remove(tmp.name)
+    return segs
 
 def transcribe_whisper(audio_path: Path) -> dict:
     total_len = AudioSegment.from_file(audio_path).duration_seconds
@@ -52,11 +62,11 @@ def transcribe_whisper(audio_path: Path) -> dict:
     bucket = []
     for p in chunk_paths:
         bucket.append(str(p))
-        if len(bucket) == 30:                    # batch size
-            out_segments.extend(transcribe_batch(bucket, cb))
-            bucket.clear()
-    if bucket:                                   # flush leftovers
-        out_segments.extend(transcribe_batch(bucket, cb))
+    if len(bucket) == 30:
+        out_segments.extend(transcribe_merged(bucket, cb))
+        bucket.clear()
+    if bucket:
+        out_segments.extend(transcribe_merged(bucket, cb))
 
     return {
         "segments": [

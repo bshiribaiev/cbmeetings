@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configure Gemini API key
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyD_8mYbblPyFQVupDbY_EkV3nuJUg0y5RQ')  
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')  
 
 if not GEMINI_API_KEY:
     print("\nGEMINI_API_KEY not found!")
