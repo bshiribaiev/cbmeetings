@@ -1,13 +1,13 @@
 /* Container and layout */
 .app-container {
   min-height: 100vh;
-  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  background: white;
   padding: 0;
 }
 
 .max-width-container {
   max-width: 1200px;
-  margin: 0 auto;
+  margin: 0 300px;
   padding: 2rem 1rem;
 }
 
@@ -190,8 +190,8 @@
 }
 
 .badge-pending {
-  background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e0 100%);
-  color: #4a5568;
+  background: whitesmoke;
+  color: black;
 }
 
 /* Upload area */
@@ -337,7 +337,7 @@
   padding: 1.5rem;
   margin-bottom: 1rem;
   transition: all 0.3s ease;
-  background: white;
+  background: whitesmoke;
 }
 
 .decision-item:hover {
@@ -369,7 +369,7 @@
 }
 
 .decision-details {
-  color: #718096;
+  color: black;
   font-size: 0.9rem;
   line-height: 1.5;
 }

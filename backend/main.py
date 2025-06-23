@@ -4,7 +4,7 @@ import json
 import sqlite3
 import time
 import logging
-import datetime
+from datetime import datetime, date
 from pathlib import Path
 from typing import List, Dict
 import subprocess
@@ -16,14 +16,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from enhanced_analyzer import EnhancedCBAnalyzer, VoteRecord
-from audio_utils import chunk_on_silence
-from diarize import transcribe_whisper
-from cleanup import clean_transcript
+
+# Import the summarization modules
 from summarize import summarize_transcript
 from render_md import md_from_summary
 
 # AI and processing imports
-# import whisper
+import whisper
 import yt_dlp
 
 # Configure logging with more detailed format
@@ -95,6 +94,7 @@ class CBProcessor:
     def __init__(self):
         self.setup_directories()
         self.init_database()
+        self.load_models()
 
     def setup_directories(self):
         output_dir.mkdir(exist_ok=True)
@@ -148,6 +148,18 @@ class CBProcessor:
 
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
+            raise
+
+    def load_models(self):
+        global whisper_model
+
+        try:
+            logger.info("Loading Whisper model...")
+            whisper_model = whisper.load_model("medium")
+            logger.info("Whisper model loaded successfully")
+
+        except Exception as e:
+            logger.error(f"Model loading failed: {e}")
             raise
 
     def check_ffmpeg(self) -> bool:
@@ -293,17 +305,85 @@ class CBProcessor:
             return audio_path
 
     def transcribe_audio(self, audio_path: str) -> str:
-        segments = chunk_on_silence(Path(audio_path))
-        merged = {"segments": []}
-        for seg in segments:
-            merged["segments"].extend(transcribe_whisper(seg)["segments"])
+        try:
+            if not whisper_model:
+                raise Exception("Whisper model not loaded")
 
-        seg_df, low_df = clean_transcript(merged)
-        transcript = " ".join(seg_df.text.tolist())
-        # optional: low_df.to_csv("review_needed.csv", index=False)
-        return transcript
+            optimized_path = self.optimize_audio_for_transcription(audio_path)
+            logger.info(f"Transcribing audio: {optimized_path}")
+
+            # Transcribe with Whisper
+            result = whisper_model.transcribe(
+                optimized_path,
+                language="en",
+                task="transcribe",
+                temperature=0.0,
+                fp16=False,
+                verbose=False,
+                word_timestamps=False,
+                condition_on_previous_text=False,
+                compression_ratio_threshold=2.4,
+                logprob_threshold=-1.0,
+                no_speech_threshold=0.6,
+            )
+
+            transcript = result["text"].strip()
+            word_count = len(transcript.split())
+
+            logger.info(f"Transcription complete: {word_count:,} words")
+            return transcript
+
+        except Exception as e:
+            logger.error(f"Transcription failed: {e}")
+            raise Exception(f"Transcription failed: {str(e)}")
+
+    def identify_meeting_type(self, title: str, topics: List[str]) -> str:
+        """Identify the type of meeting from title and topics"""
+        title_lower = title.lower() if title else ""
+        topics_lower = ' '.join(topics).lower()
+        
+        # Check title first
+        if 'parks' in title_lower and 'environment' in title_lower:
+            return "Parks & Environment Committee meeting"
+        elif 'business' in title_lower:
+            return "Business & Consumer Issues Committee meeting"
+        elif 'housing' in title_lower:
+            return "Housing Committee meeting"
+        elif 'transportation' in title_lower:
+            return "Transportation Committee meeting"
+        elif 'land use' in title_lower:
+            return "Land Use Committee meeting"
+        elif 'budget' in title_lower:
+            return "Budget Committee meeting"
+        elif 'full board' in title_lower:
+            return "Full Board meeting"
+        
+        # Check topics if title doesn't help
+        if 'parks' in topics_lower or 'environment' in topics_lower:
+            return "Parks & Environment Committee meeting"
+        elif 'business' in topics_lower or 'restaurant' in topics_lower:
+            return "Business Committee meeting"
+        elif 'budget' in topics_lower or 'fiscal' in topics_lower:
+            return "Budget Committee meeting"
+        elif 'housing' in topics_lower or 'development' in topics_lower:
+            return "Housing & Development Committee meeting"
+        
+        return "Community Board meeting"
     
+    def format_attendance_string(self, attendance: Dict) -> str:
+        """Format attendance dict into a readable string"""
+        if not attendance:
+            return "Not specified"
+        
+        parts = []
+        for key, value in attendance.items():
+            readable_key = key.replace('_', ' ').title()
+            parts.append(f"{readable_key}: {value}")
+        
+        return ", ".join(parts)
+
     def summarize_with_gemini(self, transcript: str, meeting_date: str):
+        """Use the new summarization logic with Pydantic models"""
         summary_obj = summarize_transcript(transcript, meeting_date)
         summary_md  = md_from_summary(summary_obj)
         return summary_obj, summary_md
@@ -609,7 +689,7 @@ async def health_check():
     ollama_models = []
 
     status = HealthStatus(
-        whisper=True,
+        whisper=whisper_model is not None,
         ollama=ollama_status,
         ffmpeg=processor.check_ffmpeg(),
         yt_dlp=True,
@@ -647,25 +727,106 @@ async def process_youtube_video(request: ProcessRequest):
                 transcript = processor.transcribe_audio(audio_path)
                 processor.save_full_transcript(video_id, transcript)
 
-                # Step 3: Analyze
-                logger.info("Analyzing transcript with Gemini...")
+                # Step 3: Summarize with new logic
+                logger.info("Summarizing transcript with Gemini...")
                 summary_obj, summary_md = processor.summarize_with_gemini(
                     transcript,
-                    meeting_date=datetime.date.today().isoformat()
-)
+                    meeting_date=date.today().isoformat()
+                )
+
+                # Convert summary object to the expected format
+                summary_json = summary_obj.model_dump(mode="json")
+                
+                # Transform to match the expected API response format
+                # Create a detailed summary from the topics
+                summary_parts = []
+                
+                # First paragraph: Meeting type and overview
+                topic_titles = [t.title for t in summary_obj.topics]
+                meeting_type = processor.identify_meeting_type(title, topic_titles)
+                summary_parts.append(f"{meeting_type} held on {summary_obj.meeting_date} with {len(summary_obj.topics)} main topics discussed.")
+                
+                # Second paragraph: Key topics with details
+                if summary_obj.topics:
+                    topic_details = []
+                    for topic in summary_obj.topics[:3]:  # First 3 topics
+                        detail = f"{topic.title}"
+                        if topic.speakers:
+                            detail += f" (presented by {', '.join(topic.speakers[:2])})"
+                        topic_details.append(detail)
+                    summary_parts.append(f"The meeting covered: {'; '.join(topic_details)}.")
+                
+                # Third paragraph: Key outcomes
+                total_decisions = sum(len(t.decisions) for t in summary_obj.topics)
+                total_actions = sum(len(t.action_items) for t in summary_obj.topics)
+                
+                outcomes = []
+                if total_decisions > 0:
+                    outcomes.append(f"{total_decisions} decisions were made")
+                if total_actions > 0:
+                    outcomes.append(f"{total_actions} action items were assigned")
+                
+                # Add specific examples
+                if summary_obj.topics and summary_obj.topics[0].decisions:
+                    first_decision = summary_obj.topics[0].decisions[0]
+                    outcomes.append(f"including {first_decision}")
+                
+                if outcomes:
+                    summary_parts.append(f"Key outcomes: {', '.join(outcomes)}.")
+                
+                # Extract concerns from topic summaries
+                concerns = []
+                for topic in summary_obj.topics:
+                    # Look for concern-related words in summaries
+                    if any(word in topic.summary.lower() for word in ['concern', 'issue', 'problem', 'worry']):
+                        # Extract the concern from the summary
+                        import re
+                        concern_match = re.search(r'(?:concern|issue|problem|worry)(?:s|ed)?\s+(?:about|regarding|with)\s+([^.]+)', topic.summary, re.IGNORECASE)
+                        if concern_match:
+                            concerns.append(concern_match.group(1).strip())
+                
+                analysis = {
+                    "summary": " ".join(summary_parts),
+                    "keyDecisions": [],
+                    "publicConcerns": concerns[:10],  # Limit to 10 concerns
+                    "nextSteps": [],
+                    "sentiment": summary_obj.overall_sentiment.title(),
+                    "attendance": processor.format_attendance_string(summary_obj.attendance),
+                    "mainTopics": [topic.title for topic in summary_obj.topics],
+                    "importantDates": [],
+                    "budgetItems": [],
+                    "addresses": []
+                }
+
+                # Extract decisions and action items from topics
+                for topic in summary_obj.topics:
+                    for decision in topic.decisions:
+                        analysis["keyDecisions"].append({
+                            "item": f"{topic.title}: {decision}",
+                            "outcome": "Decided",
+                            "vote": "See transcript",
+                            "details": f"Part of {topic.title} discussion"
+                        })
+                    
+                    for action_item in topic.action_items:
+                        analysis["nextSteps"].append(
+                            f"{action_item.task} (Owner: {action_item.owner}, Due: {action_item.due})"
+                        )
 
                 # Calculate processing time
-                summary_json = summary_obj.model_dump(mode="json")
                 processing_time = time.time() - start_time
 
-                # Step 4: Persist & render
-                processor.save_analysis(video_id, summary_json, transcript,
-                                        processing_time, method="gemini-summary")
+                # Step 4: Save results
+                processor.save_analysis(video_id, analysis, transcript, processing_time, method="gemini-summary")
                 processor.generate_summary_file(video_id, title, summary_md)
+
+                logger.info(f"Processing completed in {processing_time:.1f} seconds")
+
                 return {
                     "success": True,
                     "video_id": video_id,
                     "title": title,
+                    "analysis": analysis,
                     "summary_json": summary_json,
                     "summary_markdown": summary_md,
                     "processingTime": f"{processing_time:.1f} seconds",
@@ -716,24 +877,106 @@ async def process_uploaded_file(file: UploadFile = File(...)):
             video_id = f"file_{int(start_time)}"
             processor.save_full_transcript(video_id, transcript)
 
-            # Analyze
+            # Summarize with new logic
+            logger.info("Summarizing transcript with Gemini...")
             summary_obj, summary_md = processor.summarize_with_gemini(
-                    transcript,
-                    meeting_date=datetime.date.today().isoformat()
-)
+                transcript,
+                meeting_date=date.today().isoformat()
+            )
 
-                # Calculate processing time
+            # Convert summary object to the expected format
             summary_json = summary_obj.model_dump(mode="json")
+            
+            # Transform to match the expected API response format
+            # Create a detailed summary from the topics
+            summary_parts = []
+            
+            # First paragraph: Meeting type and overview
+            topic_titles = [t.title for t in summary_obj.topics]
+            meeting_type = processor.identify_meeting_type(file.filename, topic_titles)
+            summary_parts.append(f"{meeting_type} held on {summary_obj.meeting_date} with {len(summary_obj.topics)} main topics discussed.")
+            
+            # Second paragraph: Key topics with details
+            if summary_obj.topics:
+                topic_details = []
+                for topic in summary_obj.topics[:3]:  # First 3 topics
+                    detail = f"{topic.title}"
+                    if topic.speakers:
+                        detail += f" (presented by {', '.join(topic.speakers[:2])})"
+                    topic_details.append(detail)
+                summary_parts.append(f"The meeting covered: {'; '.join(topic_details)}.")
+            
+            # Third paragraph: Key outcomes
+            total_decisions = sum(len(t.decisions) for t in summary_obj.topics)
+            total_actions = sum(len(t.action_items) for t in summary_obj.topics)
+            
+            outcomes = []
+            if total_decisions > 0:
+                outcomes.append(f"{total_decisions} decisions were made")
+            if total_actions > 0:
+                outcomes.append(f"{total_actions} action items were assigned")
+            
+            # Add specific examples
+            if summary_obj.topics and summary_obj.topics[0].decisions:
+                first_decision = summary_obj.topics[0].decisions[0]
+                outcomes.append(f"including {first_decision}")
+            
+            if outcomes:
+                summary_parts.append(f"Key outcomes: {', '.join(outcomes)}.")
+            
+            # Extract concerns from topic summaries
+            concerns = []
+            for topic in summary_obj.topics:
+                # Look for concern-related words in summaries
+                if any(word in topic.summary.lower() for word in ['concern', 'issue', 'problem', 'worry']):
+                    # Extract the concern from the summary
+                    import re
+                    concern_match = re.search(r'(?:concern|issue|problem|worry)(?:s|ed)?\s+(?:about|regarding|with)\s+([^.]+)', topic.summary, re.IGNORECASE)
+                    if concern_match:
+                        concerns.append(concern_match.group(1).strip())
+            
+            analysis = {
+                "summary": " ".join(summary_parts),
+                "keyDecisions": [],
+                "publicConcerns": concerns[:10],  # Limit to 10 concerns
+                "nextSteps": [],
+                "sentiment": summary_obj.overall_sentiment.title(),
+                "attendance": processor.format_attendance_string(summary_obj.attendance),
+                "mainTopics": [topic.title for topic in summary_obj.topics],
+                "importantDates": [],
+                "budgetItems": [],
+                "addresses": []
+            }
+
+            # Extract decisions and action items from topics
+            for topic in summary_obj.topics:
+                for decision in topic.decisions:
+                    analysis["keyDecisions"].append({
+                        "item": f"{topic.title}: {decision}",
+                        "outcome": "Decided",
+                        "vote": "See transcript",
+                        "details": f"Part of {topic.title} discussion"
+                    })
+                
+                for action_item in topic.action_items:
+                    analysis["nextSteps"].append(
+                        f"{action_item.task} (Owner: {action_item.owner}, Due: {action_item.due})"
+                    )
+
+            # Calculate processing time
             processing_time = time.time() - start_time
 
-            # Step 4: Persist & render
-            processor.save_analysis(video_id, summary_json, transcript,
-                                    processing_time, method="gemini-summary")
+            # Save results
+            processor.save_analysis(video_id, analysis, transcript, processing_time, method="gemini-summary")
             processor.generate_summary_file(video_id, file.filename, summary_md)
+            
+            logger.info(f"File processing completed in {processing_time:.1f} seconds")
+
             return {
                 "success": True,
                 "video_id": video_id,
                 "title": file.filename,
+                "analysis": analysis,
                 "summary_json": summary_json,
                 "summary_markdown": summary_md,
                 "processingTime": f"{processing_time:.1f} seconds",

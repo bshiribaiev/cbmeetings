@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, Brain, CheckCircle, AlertCircle, Loader, Computer, Zap, Calendar, Users, MessageSquare, TrendingUp } from 'lucide-react';
+import { Upload, Brain, CheckCircle, AlertCircle, Loader, Computer, Users,TrendingUp, ArrowLeft } from 'lucide-react';
 import './App.css';
 
 interface ProcessingStep {
@@ -41,7 +41,7 @@ const App = () => {
   const initialSteps: ProcessingStep[] = [
     { id: 'extract', name: 'Extracting Audio', status: 'pending', message: 'Downloading and extracting audio from video...' },
     { id: 'transcribe', name: 'AI Transcription', status: 'pending', message: 'Converting speech to text with Whisper AI...' },
-    { id: 'analyze', name: 'Content Analysis', status: 'pending', message: 'Analyzing meeting content with local AI...' },
+    { id: 'analyze', name: 'Content Analysis', status: 'pending', message: 'Analyzing meeting content with AI...' },
     { id: 'complete', name: 'Generate Summary', status: 'pending', message: 'Creating structured meeting summary...' }
   ];
 
@@ -127,7 +127,7 @@ const App = () => {
       
       await new Promise(resolve => setTimeout(resolve, 2000));
       updateStep('transcribe', 'completed', 'Transcription completed');
-      updateStep('analyze', 'processing', 'Analyzing content with local AI...');
+      updateStep('analyze', 'processing', 'Analyzing content with AI...');
       
       await new Promise(resolve => setTimeout(resolve, 1500));
       updateStep('analyze', 'completed', 'Analysis completed');
@@ -248,158 +248,217 @@ const App = () => {
     }
   };
 
+  // Extract CB number from title
+  const extractCBNumber = (title: string): string => {
+    const match = title.match(/CB\s*(\d+)/i);
+    if (match) return match[1];
+    
+    // Try to find in other formats
+    const boardMatch = title.match(/Community Board\s*(\d+)/i);
+    if (boardMatch) return boardMatch[1];
+    
+    // Default
+    return '';
+  };
+
   if (analysis) {
+    const cbNumber = extractCBNumber(analysis.title);
+    
     return (
       <div className="app-container">
         <div className="max-width-container">
-          {/* Results Header */}
-          <div className="header slide-up">
-            <div className="flex justify-between align-center mb-4">
-              <div>
-                <h1 className="flex align-center gap-3">
-                  <TrendingUp size={32} style={{color: '#48bb78'}} />
-                  Meeting Analysis Complete
-                </h1>
-                <p>AI-powered analysis of Community Board meetings</p>
+          <div className="slide-up" style={{ textAlign: 'left' }}>
+            {/* Main heading */}
+            <h1 style={{
+              fontSize: '2.5rem',
+              fontWeight: '700',
+              color: '#1a202c',
+              marginBottom: '1.5rem',
+              textAlign: 'left'
+            }}>
+              Community Board {cbNumber} Meeting
+            </h1>
+
+            {/* Meeting title */}
+            <h2 style={{
+              fontSize: '1.875rem',
+              fontWeight: '600',
+              color: '#2d3748',
+              marginBottom: '1rem',
+              textAlign: 'left'
+            }}>
+              {analysis.title}
+            </h2>
+
+            {/* Meeting metadata */}
+            <div style={{
+              display: 'flex',
+              gap: '2rem',
+              marginBottom: '2rem',
+              fontSize: '0.95rem',
+              color: '#718096'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Users size={18} />
+                <span>{analysis.attendance}</span>
               </div>
+              <div className={`badge ${getSentimentClass(analysis.sentiment)}`}>
+                Sentiment: {analysis.sentiment}
+              </div>
+            </div>
+
+            {/* Summary section */}
+            <h3 style={{
+              fontSize: '1.5rem',
+              fontWeight: '600',
+              color: '#1a202c',
+              marginBottom: '1rem',
+              textAlign: 'left'
+            }}>
+              Summary
+            </h3>
+            
+            <p style={{
+              color: 'black',
+              fontSize: '1.1rem',
+              lineHeight: '1.8',
+              marginBottom: '2rem',
+              textAlign: 'left'
+            }}>
+              {analysis.summary}
+            </p>
+
+            {/* Main Topics */}
+            {analysis.mainTopics && analysis.mainTopics.length > 0 && (
+              <div style={{ marginBottom: '2rem' }}>
+                <h3 style={{
+                  fontSize: '1.25rem',
+                  fontWeight: '600',
+                  color: '#1a202c',
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  Main Discussion Topics
+                </h3>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  {analysis.mainTopics.map((topic, idx) => (
+                    <span
+                      key={idx}
+                      className="badge badge-pending"
+                      style={{ fontSize: '0.9rem', padding: '0.5rem 1rem' }}
+                    >
+                      {topic}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Key Decisions */}
+            {analysis.keyDecisions && analysis.keyDecisions.length > 0 && (
+              <div style={{ marginBottom: '2rem' }}>
+                <h3 style={{
+                  fontSize: '1.25rem',
+                  fontWeight: '600',
+                  color: '#1a202c',
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}>
+                  Key Decisions & Voting Results
+                </h3>
+                <div style={{ display: 'grid', gap: '1rem' }}>
+                  {analysis.keyDecisions.map((decision, idx) => (
+                    <div key={idx} className="decision-item">
+                      <div className="decision-header">
+                        <h4 className="decision-title">{decision.item}</h4>
+                        <div className="decision-badges">
+                          <span className={`badge ${
+                            decision.outcome.includes('Approved') || decision.outcome.includes('Supported')
+                              ? 'badge-success' 
+                              : 'badge-error'
+                          }`}>
+                            {decision.outcome}
+                          </span>
+                          <span className="badge badge-pending">
+                            {decision.vote}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="decision-details">{decision.details}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Concerns and Next Steps */}
+            <div className="grid grid-2" style={{ marginBottom: '2rem' }}>
+              {analysis.publicConcerns && analysis.publicConcerns.length > 0 && (
+                <div>
+                  <h3 style={{
+                    fontSize: '1.25rem',
+                    fontWeight: '600',
+                    color: '#1a202c',
+                    marginBottom: '1rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem'
+                  }}>
+                    Community Concerns
+                  </h3>
+                  <ul className="list">
+                    {analysis.publicConcerns.map((concern, idx) => (
+                      <li key={idx} className="list-item">
+                        <span className="list-bullet list-bullet-yellow"></span>
+                        <span style={{color: '#4a5568', fontSize: '0.95rem', lineHeight: '1.6'}}>
+                          {concern}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {analysis.nextSteps && analysis.nextSteps.length > 0 && (
+                <div>
+                  <h3 style={{
+                    fontSize: '1.25rem',
+                    fontWeight: '600',
+                    color: '#1a202c',
+                    marginBottom: '1rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem'
+                  }}>
+                    <TrendingUp size={20} />
+                    Next Steps & Action Items
+                  </h3>
+                  <ul className="list">
+                    {analysis.nextSteps.map((step, idx) => (
+                      <li key={idx} className="list-item">
+                        <span className="list-bullet list-bullet-green"></span>
+                        <span style={{color: '#4a5568', fontSize: '0.95rem', lineHeight: '1.6'}}>
+                          {step}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            {/* Process another meeting button - bottom left */}
+            <div style={{ marginTop: '3rem' }}>
               <button onClick={resetProcessor} className="btn btn-primary">
-                <Play size={16} />
+                <ArrowLeft size={16} />
                 Process Another Meeting
               </button>
             </div>
-            
-            <div className="header-stats">
-              <div className="stat-card">
-                <Zap size={24} style={{color: '#4299e1', margin: '0 auto 0.5rem'}} />
-                <div className="stat-number">{analysis.processingTime}</div>
-                <div className="stat-label">Processing Time</div>
-              </div>
-              <div className="stat-card">
-                <MessageSquare size={24} style={{color: '#ed8936', margin: '0 auto 0.5rem'}} />
-                <div className="stat-number">{analysis.sentiment}</div>
-                <div className="stat-label">Meeting Sentiment</div>
-              </div>
-            </div>
           </div>
-
-          {/* Meeting Summary */}
-          <div className="card slide-up">
-            <h2 className="card-title">
-              <Calendar size={20} />
-              {analysis.title}
-            </h2>
-            <p style={{color: '#4a5568', fontSize: '1.1rem', lineHeight: '1.7', marginBottom: '1rem'}}>
-              {analysis.summary}
-            </p>
-            <div className="flex align-center gap-4" style={{fontSize: '0.9rem', color: '#718096'}}>
-              <div className="flex align-center gap-1">
-                <Users size={16} />
-                <strong>Attendance:</strong> {analysis.attendance}
-              </div>
-              <div className={`badge ${getSentimentClass(analysis.sentiment)}`}>
-                {analysis.sentiment}
-              </div>
-            </div>
-          </div>
-
-          {/* Key Decisions */}
-          {analysis.keyDecisions && analysis.keyDecisions.length > 0 && (
-            <div className="card slide-up">
-              <h3 className="analysis-title">
-                <CheckCircle size={20} />
-                Key Decisions & Voting Results
-              </h3>
-              <div className="grid gap-4">
-                {analysis.keyDecisions.map((decision, idx) => (
-                  <div key={idx} className="decision-item">
-                    <div className="decision-header">
-                      <h4 className="decision-title">{decision.item}</h4>
-                      <div className="decision-badges">
-                        {decision.outcome.includes('Approved') || decision.outcome.includes('Supported') ? (
-                          <CheckCircle size={18} style={{color: '#48bb78'}} />
-                        ) : (
-                          <AlertCircle size={18} style={{color: '#f56565'}} />
-                        )}
-                        <span className={`badge ${
-                          decision.outcome.includes('Approved') || decision.outcome.includes('Supported')
-                            ? 'badge-success' 
-                            : 'badge-error'
-                        }`}>
-                          {decision.outcome}
-                        </span>
-                        <span className="badge badge-pending">
-                          {decision.vote}
-                        </span>
-                      </div>
-                    </div>
-                    <p className="decision-details">{decision.details}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Concerns and Next Steps */}
-          <div className="grid grid-2">
-            {analysis.publicConcerns && analysis.publicConcerns.length > 0 && (
-              <div className="card slide-up">
-                <h3 className="analysis-title">
-                  <MessageSquare size={20} />
-                  Community Concerns
-                </h3>
-                <ul className="list">
-                  {analysis.publicConcerns.map((concern, idx) => (
-                    <li key={idx} className="list-item">
-                      <span className="list-bullet list-bullet-yellow"></span>
-                      <span style={{color: '#4a5568', fontSize: '0.9rem', lineHeight: '1.5'}}>
-                        {concern}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {analysis.nextSteps && analysis.nextSteps.length > 0 && (
-              <div className="card slide-up">
-                <h3 className="analysis-title">
-                  <TrendingUp size={20} />
-                  Next Steps & Action Items
-                </h3>
-                <ul className="list">
-                  {analysis.nextSteps.map((step, idx) => (
-                    <li key={idx} className="list-item">
-                      <span className="list-bullet list-bullet-green"></span>
-                      <span style={{color: '#4a5568', fontSize: '0.9rem', lineHeight: '1.5'}}>
-                        {step}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-
-          {/* Main Topics */}
-          {analysis.mainTopics && analysis.mainTopics.length > 0 && (
-            <div className="card slide-up">
-              <h3 className="analysis-title">
-                <Brain size={20} />
-                Main Discussion Topics
-              </h3>
-              <div className="flex" style={{gap: '0.75rem', flexWrap: 'wrap'}}>
-                {analysis.mainTopics.map((topic, idx) => (
-                  <span
-                    key={idx}
-                    className="badge badge-pending"
-                    style={{fontSize: '0.85rem', padding: '0.5rem 1rem'}}
-                  >
-                    {topic}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     );
@@ -477,7 +536,7 @@ const App = () => {
             <div style={{display: 'flex', flexDirection: 'column', gap: '1rem'}}>
               <input
                 type="url"
-                placeholder="https://www.youtube.com/watch?v=... (CB7 meeting video)"
+                placeholder="https://www.youtube.com/watch?v=... (CB meeting video)"
                 value={youtubeUrl}
                 onChange={(e) => setYoutubeUrl(e.target.value)}
                 className="input"
@@ -594,11 +653,6 @@ const App = () => {
                       {step.duration && (
                         <span className="step-duration">{step.duration}</span>
                       )}
-                    </div>
-                    <div className="step-description" style={{
-                      color: step.status === 'error' ? '#fed7d7' : '#a0aec0'
-                    }}>
-                      {/* {step.message} */}
                     </div>
                   </div>
                 </div>

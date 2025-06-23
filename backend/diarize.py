@@ -3,12 +3,13 @@ from pathlib import Path
 import sys, time, os
 from pydub import AudioSegment      # for quick duration probe
 from audio_utils import chunk_on_silence
-import tempfile, os
+import tempfile
+import config
 
 model = WhisperModel(
-    "large-v3",
-    device="cpu",
-    compute_type="int8",            # ~2 GB RAM
+    config.WHISPER_MODEL,
+    device=config.WHISPER_DEVICE,
+    compute_type=config.WHISPER_PREC,            # ~2 GB RAM
     cpu_threads=os.cpu_count(),
 )
 
@@ -26,17 +27,18 @@ def make_progress_bar(total_audio_sec: float):
         sys.stderr.flush()
     return _cb
 
-def transcribe_merged(bucket_paths, callback):
+def transcribe_merged(bucket_paths):
     """Concatenate 10–30 short chunks, run a single transcribe call."""
     if len(bucket_paths) == 1:
-        return model.transcribe(
+        segments, info = model.transcribe(
             bucket_paths[0],
             language="en",
             vad_filter=False,
-            beam_size=1, best_of=1,
+            beam_size=1, 
+            best_of=1,
             temperature=0.2,
-            callback=callback,
-        )[0]                        # returns (segments, info)
+        )
+        return segments
 
     # merge into a temp WAV
     merged = sum((AudioSegment.from_file(p) for p in bucket_paths))
@@ -44,9 +46,11 @@ def transcribe_merged(bucket_paths, callback):
         merged.export(tmp.name, format="wav")
     segs, _ = model.transcribe(
         tmp.name,
-        language="en", vad_filter=False,
-        beam_size=1, best_of=1, temperature=0.2,
-        callback=callback,
+        language="en", 
+        vad_filter=False,
+        beam_size=1, 
+        best_of=1, 
+        temperature=0.2,
     )
     os.remove(tmp.name)
     return segs
@@ -55,18 +59,17 @@ def transcribe_whisper(audio_path: Path) -> dict:
     total_len = AudioSegment.from_file(audio_path).duration_seconds
     cb        = make_progress_bar(total_len)
 
-    # ① silence-split (you already have this function)
     chunk_paths = chunk_on_silence(audio_path)   # returns list[Path]
 
     out_segments = []
     bucket = []
     for p in chunk_paths:
         bucket.append(str(p))
-    if len(bucket) == 30:
-        out_segments.extend(transcribe_merged(bucket, cb))
-        bucket.clear()
+        if len(bucket) == 30:
+            out_segments.extend(transcribe_merged(bucket))
+            bucket.clear()
     if bucket:
-        out_segments.extend(transcribe_merged(bucket, cb))
+        out_segments.extend(transcribe_merged(bucket))
 
     return {
         "segments": [
