@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Brain, CheckCircle, AlertCircle, Loader, Computer, Users,TrendingUp, ArrowLeft } from 'lucide-react';
+import { Upload, Brain, CheckCircle, AlertCircle, Loader, Computer, Users, MessageSquare, TrendingUp, ArrowLeft } from 'lucide-react';
 import './App.css';
+import MarkdownRenderer from './components/MarkdownRenderer';
 
 interface ProcessingStep {
   id: string;
@@ -25,6 +26,7 @@ interface MeetingAnalysis {
   attendance: string;
   mainTopics: string[];
   processingTime: string;
+  summary_markdown?: string; // Add markdown summary support
 }
 
 const App = () => {
@@ -148,7 +150,8 @@ const App = () => {
         sentiment: result.analysis.sentiment || 'Mixed',
         attendance: result.analysis.attendance || 'Not specified',
         mainTopics: result.analysis.mainTopics || [],
-        processingTime: result.processingTime || 'Unknown'
+        processingTime: result.processingTime || 'Unknown',
+        summary_markdown: result.summary_markdown // Add markdown summary
       });
 
     } 
@@ -273,7 +276,7 @@ const App = () => {
               fontSize: '2.5rem',
               fontWeight: '700',
               color: '#1a202c',
-              marginBottom: '1.5rem',
+              marginBottom: '1rem',
               textAlign: 'left'
             }}>
               Community Board {cbNumber} Meeting
@@ -284,7 +287,7 @@ const App = () => {
               fontSize: '1.875rem',
               fontWeight: '600',
               color: '#2d3748',
-              marginBottom: '1rem',
+              marginBottom: '1.5rem',
               textAlign: 'left'
             }}>
               {analysis.title}
@@ -307,149 +310,164 @@ const App = () => {
               </div>
             </div>
 
-            {/* Summary section */}
-            <h3 style={{
-              fontSize: '1.5rem',
-              fontWeight: '600',
-              color: '#1a202c',
-              marginBottom: '1rem',
-              textAlign: 'left'
-            }}>
-              Summary
-            </h3>
-            
-            <p style={{
-              color: 'black',
-              fontSize: '1.1rem',
-              lineHeight: '1.8',
-              marginBottom: '2rem',
-              textAlign: 'left'
-            }}>
-              {analysis.summary}
-            </p>
-
-            {/* Main Topics */}
-            {analysis.mainTopics && analysis.mainTopics.length > 0 && (
-              <div style={{ marginBottom: '2rem' }}>
+            {/* Use markdown renderer if available, otherwise use traditional display */}
+            {analysis.summary_markdown ? (
+              <MarkdownRenderer markdown={analysis.summary_markdown} />
+            ) : (
+              <>
+                {/* Summary section */}
                 <h3 style={{
-                  fontSize: '1.25rem',
+                  fontSize: '1.5rem',
                   fontWeight: '600',
                   color: '#1a202c',
                   marginBottom: '1rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
+                  textAlign: 'left'
                 }}>
-                  Main Discussion Topics
+                  Summary
                 </h3>
-                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                  {analysis.mainTopics.map((topic, idx) => (
-                    <span
-                      key={idx}
-                      className="badge badge-pending"
-                      style={{ fontSize: '0.9rem', padding: '0.5rem 1rem' }}
-                    >
-                      {topic}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
+                
+                <p style={{
+                  color: '#4a5568',
+                  fontSize: '1.1rem',
+                  lineHeight: '1.8',
+                  marginBottom: '2rem',
+                  textAlign: 'left'
+                }}>
+                  {analysis.summary}
+                </p>
 
-            {/* Key Decisions */}
-            {analysis.keyDecisions && analysis.keyDecisions.length > 0 && (
-              <div style={{ marginBottom: '2rem' }}>
-                <h3 style={{
-                  fontSize: '1.25rem',
-                  fontWeight: '600',
-                  color: '#1a202c',
-                  marginBottom: '1rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}>
-                  Key Decisions & Voting Results
-                </h3>
-                <div style={{ display: 'grid', gap: '1rem' }}>
-                  {analysis.keyDecisions.map((decision, idx) => (
-                    <div key={idx} className="decision-item">
-                      <div className="decision-header">
-                        <h4 className="decision-title">{decision.item}</h4>
-                        <div className="decision-badges">
-                          <span className={`badge ${
-                            decision.outcome.includes('Approved') || decision.outcome.includes('Supported')
-                              ? 'badge-success' 
-                              : 'badge-error'
-                          }`}>
-                            {decision.outcome}
-                          </span>
-                          <span className="badge badge-pending">
-                            {decision.vote}
-                          </span>
-                        </div>
-                      </div>
-                      <p className="decision-details">{decision.details}</p>
+                {/* Main Topics */}
+                {analysis.mainTopics && analysis.mainTopics.length > 0 && (
+                  <div style={{ marginBottom: '2rem' }}>
+                    <h3 style={{
+                      fontSize: '1.25rem',
+                      fontWeight: '600',
+                      color: '#1a202c',
+                      marginBottom: '1rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem'
+                    }}>
+                      <Brain size={20} />
+                      Main Discussion Topics
+                    </h3>
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      {analysis.mainTopics.map((topic, idx) => (
+                        <span
+                          key={idx}
+                          className="badge badge-pending"
+                          style={{ fontSize: '0.9rem', padding: '0.5rem 1rem' }}
+                        >
+                          {topic}
+                        </span>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+                )}
+
+                {/* Key Decisions */}
+                {analysis.keyDecisions && analysis.keyDecisions.length > 0 && (
+                  <div style={{ marginBottom: '2rem' }}>
+                    <h3 style={{
+                      fontSize: '1.25rem',
+                      fontWeight: '600',
+                      color: '#1a202c',
+                      marginBottom: '1rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem'
+                    }}>
+                      <CheckCircle size={20} />
+                      Key Decisions & Voting Results
+                    </h3>
+                    <div style={{ display: 'grid', gap: '1rem' }}>
+                      {analysis.keyDecisions.map((decision, idx) => (
+                        <div key={idx} className="decision-item">
+                          <div className="decision-header">
+                            <h4 className="decision-title">{decision.item}</h4>
+                            <div className="decision-badges">
+                              {decision.outcome.includes('Approved') || decision.outcome.includes('Supported') ? (
+                                <CheckCircle size={18} style={{color: '#48bb78'}} />
+                              ) : (
+                                <AlertCircle size={18} style={{color: '#f56565'}} />
+                              )}
+                              <span className={`badge ${
+                                decision.outcome.includes('Approved') || decision.outcome.includes('Supported')
+                                  ? 'badge-success' 
+                                  : 'badge-error'
+                              }`}>
+                                {decision.outcome}
+                              </span>
+                              <span className="badge badge-pending">
+                                {decision.vote}
+                              </span>
+                            </div>
+                          </div>
+                          <p className="decision-details">{decision.details}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Concerns and Next Steps */}
+                <div className="grid grid-2" style={{ marginBottom: '2rem' }}>
+                  {analysis.publicConcerns && analysis.publicConcerns.length > 0 && (
+                    <div>
+                      <h3 style={{
+                        fontSize: '1.25rem',
+                        fontWeight: '600',
+                        color: '#1a202c',
+                        marginBottom: '1rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem'
+                      }}>
+                        <MessageSquare size={20} />
+                        Community Concerns
+                      </h3>
+                      <ul className="list">
+                        {analysis.publicConcerns.map((concern, idx) => (
+                          <li key={idx} className="list-item">
+                            <span className="list-bullet list-bullet-yellow"></span>
+                            <span style={{color: '#4a5568', fontSize: '0.95rem', lineHeight: '1.6'}}>
+                              {concern}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {analysis.nextSteps && analysis.nextSteps.length > 0 && (
+                    <div>
+                      <h3 style={{
+                        fontSize: '1.25rem',
+                        fontWeight: '600',
+                        color: '#1a202c',
+                        marginBottom: '1rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem'
+                      }}>
+                        <TrendingUp size={20} />
+                        Next Steps & Action Items
+                      </h3>
+                      <ul className="list">
+                        {analysis.nextSteps.map((step, idx) => (
+                          <li key={idx} className="list-item">
+                            <span className="list-bullet list-bullet-green"></span>
+                            <span style={{color: '#4a5568', fontSize: '0.95rem', lineHeight: '1.6'}}>
+                              {step}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
-              </div>
+              </>
             )}
-
-            {/* Concerns and Next Steps */}
-            <div className="grid grid-2" style={{ marginBottom: '2rem' }}>
-              {analysis.publicConcerns && analysis.publicConcerns.length > 0 && (
-                <div>
-                  <h3 style={{
-                    fontSize: '1.25rem',
-                    fontWeight: '600',
-                    color: '#1a202c',
-                    marginBottom: '1rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem'
-                  }}>
-                    Community Concerns
-                  </h3>
-                  <ul className="list">
-                    {analysis.publicConcerns.map((concern, idx) => (
-                      <li key={idx} className="list-item">
-                        <span className="list-bullet list-bullet-yellow"></span>
-                        <span style={{color: '#4a5568', fontSize: '0.95rem', lineHeight: '1.6'}}>
-                          {concern}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {analysis.nextSteps && analysis.nextSteps.length > 0 && (
-                <div>
-                  <h3 style={{
-                    fontSize: '1.25rem',
-                    fontWeight: '600',
-                    color: '#1a202c',
-                    marginBottom: '1rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem'
-                  }}>
-                    <TrendingUp size={20} />
-                    Next Steps & Action Items
-                  </h3>
-                  <ul className="list">
-                    {analysis.nextSteps.map((step, idx) => (
-                      <li key={idx} className="list-item">
-                        <span className="list-bullet list-bullet-green"></span>
-                        <span style={{color: '#4a5568', fontSize: '0.95rem', lineHeight: '1.6'}}>
-                          {step}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
 
             {/* Process another meeting button - bottom left */}
             <div style={{ marginTop: '3rem' }}>

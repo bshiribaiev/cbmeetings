@@ -15,7 +15,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from enhanced_analyzer import EnhancedCBAnalyzer, VoteRecord
+from enhanced_analyzer import EnhancedCBAnalyzer
 
 # Import the summarization modules
 from summarize import summarize_transcript
