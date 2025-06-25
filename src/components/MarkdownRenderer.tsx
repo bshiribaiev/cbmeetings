@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle, TrendingUp, Users, Calendar } from 'lucide-react';
+import { Calendar } from 'lucide-react';
 
 interface MarkdownRendererProps {
   markdown: string;
@@ -10,7 +10,6 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
   const lines = markdown.split('\n');
   let date = '';
   let overviewText = '';
-  let sentiment = 'Not specified';
   let attendance = 'Not specified';
   const sections: any[] = [];
   
@@ -38,12 +37,6 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
     if (inOverview && line && !line.startsWith('**')) {
       overviewText = line;
       inOverview = false;
-      continue;
-    }
-    
-    // Extract sentiment and attendance
-    if (line.startsWith('**Overall Sentiment:**')) {
-      sentiment = line.replace('**Overall Sentiment:**', '').trim();
       continue;
     }
     
@@ -108,18 +101,9 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
     }
   }
   
-  // Don't forget the last section
   if (currentSection) {
     sections.push(currentSection);
   }
-  
-  const getSentimentClass = (sentiment: string) => {
-    const sentimentLower = sentiment.toLowerCase();
-    if (sentimentLower.includes('positive')) return 'sentiment-positive';
-    if (sentimentLower.includes('mixed') || sentimentLower.includes('neutral')) return 'sentiment-mixed';
-    if (sentimentLower.includes('negative')) return 'sentiment-negative';
-    return 'sentiment-mixed';
-  };
   
   return (
     <div style={{ textAlign: 'left' }}>
@@ -162,15 +146,10 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
             <span>Meeting Date: {date}</span>
           </div>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#718096' }}>
           <span>Attendees: {attendance}</span>
         </div>
-        <div className={`badge ${getSentimentClass(sentiment)}`}>
-          Overall Sentiment: {sentiment}
-        </div>
       </div>
-      
-      {/* Summary section would go here if needed */}
       
       {/* Topic Sections */}
       {sections.length > 0 && (
@@ -186,7 +165,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
           
           {sections.map((section, idx) => (
             <div key={idx} style={{
-              background: '#f8fafc',
+              background: 'white',
               borderRadius: '1rem',
               padding: '2rem',
               marginBottom: '2rem',
@@ -222,7 +201,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
                     Summary
                   </h5>
                   <p style={{
-                    color: '#4a5568',
+                    color: 'black',
                     fontSize: '1rem',
                     lineHeight: '1.7',
                     marginBottom: '1.5rem'
@@ -238,7 +217,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
                   <h5 style={{
                     fontSize: '1.1rem',
                     fontWeight: '600',
-                    color: '#1a202c',
+                    color: 'black',
                     marginBottom: '0.75rem',
                     display: 'flex',
                     alignItems: 'center',
@@ -249,12 +228,12 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
                   <ul style={{ marginBottom: '1.5rem' }}>
                     {section.decisions.map((decision: string, dIdx: number) => (
                       <li key={dIdx} style={{
-                        color: '#4a5568',
-                        fontSize: '0.95rem',
+                        color: 'black',
+                        fontSize: '1rem',
                         lineHeight: '1.6',
                         marginBottom: '0.5rem'
                       }}>
-                        {decision}
+                         - { decision}
                       </li>
                     ))}
                   </ul>
@@ -279,18 +258,18 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
                     {section.actionItems.map((item: any, aIdx: number) => (
                       <div key={aIdx} style={{ marginBottom: '1rem' }}>
                         <p style={{
-                          color: '#2d3748',
-                          fontSize: '0.95rem',
-                          fontWeight: '600',
+                          color: 'black',
+                          fontSize: '1rem',
                           marginBottom: '0.25rem'
                         }}>
-                          {item.task}
+                          - {item.task}
                         </p>
                         {(item.owner || item.due) && (
                           <p style={{
                             color: '#718096',
-                            fontSize: '0.85rem',
-                            paddingLeft: '1rem'
+                            paddingLeft: '0.75rem',
+                            fontSize: '1rem'
+            
                           }}>
                             {item.owner && <span>Owner: {item.owner}</span>}
                             {item.owner && item.due && <span> • </span>}
@@ -302,11 +281,6 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
                   </div>
                 </>
               )}
-              {section.sentiment && (
-                  <span className={`badge ${getSentimentClass(section.sentiment)}`} style={{ fontSize: '0.8rem' }}>
-                    Topic Sentiment: {section.sentiment}
-                  </span>
-                )}
             </div>
           ))}
         </>

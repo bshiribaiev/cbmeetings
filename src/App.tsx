@@ -1,15 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, Brain, CheckCircle, AlertCircle, Loader, Computer, Calendar, Users, MessageSquare, TrendingUp, ArrowLeft } from 'lucide-react';
+import { Upload, Brain, CheckCircle, Loader, ArrowLeft } from 'lucide-react';
 import './App.css';
 import MarkdownRenderer from './components/MarkdownRenderer';
-
-interface ProcessingStep {
-  id: string;
-  name: string;
-  status: 'pending' | 'processing' | 'completed' | 'error';
-  message: string;
-  duration?: string;
-}
 
 interface MeetingAnalysis {
   title: string;
@@ -33,19 +25,11 @@ const App = () => {
   const [file, setFile] = useState<File | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [steps, setSteps] = useState<ProcessingStep[]>([]);
   const [analysis, setAnalysis] = useState<MeetingAnalysis | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [processingMode, setProcessingMode] = useState<'file' | 'youtube'>('youtube');
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const initialSteps: ProcessingStep[] = [
-    { id: 'extract', name: 'Extracting Audio', status: 'pending', message: 'Downloading and extracting audio from video...' },
-    { id: 'transcribe', name: 'AI Transcription', status: 'pending', message: 'Converting speech to text with Whisper AI...' },
-    { id: 'analyze', name: 'Content Analysis', status: 'pending', message: 'Analyzing meeting content with AI...' },
-    { id: 'complete', name: 'Generate Summary', status: 'pending', message: 'Creating structured meeting summary...' }
-  ];
 
   // Check backend status on component mount
   useEffect(() => {
@@ -67,13 +51,6 @@ const App = () => {
   
   }, []);
 
-  const updateStep = (stepId: string, status: ProcessingStep['status'], message: string, duration?: string) => {
-    setSteps(prev => prev.map(step => 
-      step.id === stepId 
-        ? { ...step, status, message, duration }
-        : step
-    ));
-  };
 
   const processVideo = async () => {
     if (backendStatus !== 'online') {
@@ -82,16 +59,12 @@ const App = () => {
     }
 
     setIsProcessing(true);
-    setSteps(initialSteps);
     setAnalysis(null);
 
     try {
       let response;
       
-      if (processingMode === 'youtube' && youtubeUrl) {
-        // Process YouTube URL
-        updateStep('extract', 'processing', 'Downloading video from YouTube...');
-        
+      if (processingMode === 'youtube' && youtubeUrl) {        
         response = await fetch('http://localhost:8000/process-youtube', {
           method: 'POST',
           headers: {
@@ -102,9 +75,6 @@ const App = () => {
       } 
 
       else if (processingMode === 'file' && file) {
-        // Process uploaded file
-        updateStep('extract', 'processing', 'Processing uploaded file...');
-        
         const formData = new FormData();
         formData.append('file', file);
         
@@ -123,22 +93,7 @@ const App = () => {
         throw new Error(errorData.detail || 'Processing failed');
       }
 
-      // Simulate step progression
-      updateStep('extract', 'completed', 'Audio extracted successfully');
-      updateStep('transcribe', 'processing', 'Transcribing audio with Whisper AI...');
-      
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      updateStep('transcribe', 'completed', 'Transcription completed');
-      updateStep('analyze', 'processing', 'Analyzing content with AI...');
-      
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      updateStep('analyze', 'completed', 'Analysis completed');
-      updateStep('complete', 'processing', 'Generating summary...');
-
       const result = await response.json();
-      
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      updateStep('complete', 'completed', 'Summary generated successfully!', '2.1s');
 
       // Transform the response to match our interface
       setAnalysis({
@@ -158,7 +113,6 @@ const App = () => {
     
     catch (error) {
       console.error('Processing error:', error);
-      updateStep('analyze', 'error', `Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`, '');
     } 
     
     finally {
@@ -201,27 +155,8 @@ const App = () => {
   const resetProcessor = () => {
     setFile(null);
     setYoutubeUrl('');
-    setSteps([]);
     setAnalysis(null);
     setIsProcessing(false);
-  };
-
-  const getStepIcon = (step: ProcessingStep) => {
-    switch (step.status) {
-      case 'completed':
-        return <CheckCircle className="step-icon" style={{color: '#48bb78'}} />;
-      case 'processing':
-        return <Loader className="step-icon animate-spin" style={{color: '#4299e1'}} />;
-      case 'error':
-        return <AlertCircle className="step-icon" style={{color: '#f56565'}} />;
-      default:
-        return <div className="step-icon" style={{
-          width: '1.25rem', 
-          height: '1.25rem', 
-          border: '2px solid #cbd5e0', 
-          borderRadius: '50%'
-        }} />;
-    }
   };
 
   const getBackendStatusColor = () => {
@@ -279,7 +214,7 @@ const App = () => {
       if (titleLower.includes(area)) return number;
     }
     
-    return '?';
+    return '';
   };
 
   if (analysis) {
@@ -367,25 +302,6 @@ const App = () => {
             </div>
           </div>
         </div>
-
-        {/* Backend Status Warning */}
-        {backendStatus === 'offline' && (
-          <div className="card" style={{
-            background: 'linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%)',
-            border: '2px solid #fc8181',
-            marginBottom: '2rem'
-          }}>
-            <div className="flex align-center gap-3">
-              <AlertCircle size={24} style={{color: '#742a2a'}} />
-              <div>
-                <h3 style={{color: '#742a2a', marginBottom: '0.5rem'}}>Backend Server Offline</h3>
-                <p style={{color: '#742a2a', fontSize: '0.9rem', marginBottom: '0'}}>
-                  Please start the Python backend server by running <code>python main.py</code> in your backend directory.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Processing Mode & Input */}
         <div className="card">
@@ -502,39 +418,6 @@ const App = () => {
             )}
           </button>
         </div>
-
-        {/* Processing Steps */}
-        {steps.length > 0 && (
-          <div className="card">
-            <h3 className="analysis-title">
-              <Computer size={20} />
-              Processing...
-            </h3>
-            
-            <div className="processing-steps">
-              {steps.map((step) => (
-                <div key={step.id} className="processing-step">
-                  <div>{getStepIcon(step)}</div>
-                  <div className="step-content">
-                    <div className="flex justify-between align-center">
-                      <div className="step-title" style={{
-                        color: step.status === 'completed' ? '#48bb78' :
-                               step.status === 'processing' ? '#4299e1' :
-                               step.status === 'error' ? '#f56565' : '#e2e8f0'
-                      }}>
-                        {step.name}
-                      </div>
-                      {step.duration && (
-                        <span className="step-duration">{step.duration}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-          </div>
-        )}
       </div>
     </div>
   );

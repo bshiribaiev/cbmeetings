@@ -1,14 +1,41 @@
 /* Container and layout */
 .app-container {
   min-height: 100vh;
-  background: white;
+  background: whitesmoke;
   padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .max-width-container {
   max-width: 1200px;
-  margin: 0 300px;
+  margin: 0 auto;
   padding: 2rem 1rem;
+}
+
+@media(max-width: 1200px) {
+  .max-width-container {
+    margin: 0 15%;
+  }
+}
+
+@media(max-width: 900px) {
+  .max-width-container {
+    margin: 0 10%;
+  }
+}
+
+@media(max-width: 800px) {
+  .max-width-container {
+    margin: 0 5%;
+  }
+}
+
+@media(max-width: 700px) {
+  .max-width-container {
+    margin: 0 auto;
+  }
 }
 
 /* Header styles */
