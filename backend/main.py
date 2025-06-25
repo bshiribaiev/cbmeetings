@@ -15,7 +15,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from enhanced_analyzer import EnhancedCBAnalyzer
+from enhanced_analyzer import EnhancedCBAnalyzer, VoteRecord
 
 # Import the summarization modules
 from summarize import summarize_transcript
@@ -382,6 +382,66 @@ class CBProcessor:
         
         return ", ".join(parts)
 
+    def extract_meeting_date(self, title: str, transcript: str) -> str:
+        """Extract meeting date from title or transcript"""
+        import re
+        
+        # Common date patterns to look for
+        date_patterns = [
+            # Month DD, YYYY format
+            r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})',
+            # MM/DD/YYYY or MM-DD-YYYY
+            r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})',
+            # YYYY-MM-DD
+            r'(\d{4})-(\d{2})-(\d{2})',
+        ]
+        
+        # Month name to number mapping
+        months = {
+            'january': '01', 'february': '02', 'march': '03', 'april': '04',
+            'may': '05', 'june': '06', 'july': '07', 'august': '08',
+            'september': '09', 'october': '10', 'november': '11', 'december': '12'
+        }
+        
+        # Try to find date in title first
+        for pattern in date_patterns:
+            match = re.search(pattern, title, re.IGNORECASE)
+            if match:
+                if pattern == date_patterns[0]:  # Month name format
+                    month_name = match.group(1).lower()
+                    month = months.get(month_name, '01')
+                    day = match.group(2).zfill(2)
+                    year = match.group(3)
+                    return f"{year}-{month}-{day}"
+                elif pattern == date_patterns[1]:  # MM/DD/YYYY
+                    month = match.group(1).zfill(2)
+                    day = match.group(2).zfill(2)
+                    year = match.group(3)
+                    return f"{year}-{month}-{day}"
+                elif pattern == date_patterns[2]:  # YYYY-MM-DD
+                    return match.group(0)
+        
+        # If not in title, check first 500 chars of transcript
+        transcript_start = transcript[:500] if len(transcript) > 500 else transcript
+        for pattern in date_patterns:
+            match = re.search(pattern, transcript_start, re.IGNORECASE)
+            if match:
+                if pattern == date_patterns[0]:  # Month name format
+                    month_name = match.group(1).lower()
+                    month = months.get(month_name, '01')
+                    day = match.group(2).zfill(2)
+                    year = match.group(3)
+                    return f"{year}-{month}-{day}"
+                elif pattern == date_patterns[1]:  # MM/DD/YYYY
+                    month = match.group(1).zfill(2)
+                    day = match.group(2).zfill(2)
+                    year = match.group(3)
+                    return f"{year}-{month}-{day}"
+                elif pattern == date_patterns[2]:  # YYYY-MM-DD
+                    return match.group(0)
+        
+        return None
+
     def summarize_with_gemini(self, transcript: str, meeting_date: str):
         """Use the new summarization logic with Pydantic models"""
         summary_obj = summarize_transcript(transcript, meeting_date)
@@ -729,9 +789,16 @@ async def process_youtube_video(request: ProcessRequest):
 
                 # Step 3: Summarize with new logic
                 logger.info("Summarizing transcript with Gemini...")
+                
+                # Try to extract meeting date from title or transcript
+                meeting_date = processor.extract_meeting_date(title, transcript)
+                if not meeting_date:
+                    meeting_date = date.today().isoformat()
+                    logger.warning(f"Could not extract meeting date, using today's date: {meeting_date}")
+                
                 summary_obj, summary_md = processor.summarize_with_gemini(
                     transcript,
-                    meeting_date=date.today().isoformat()
+                    meeting_date=meeting_date
                 )
 
                 # Convert summary object to the expected format

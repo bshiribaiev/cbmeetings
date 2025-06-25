@@ -4,7 +4,7 @@ def md_from_summary(ms: MeetingSummary) -> str:
     lines = []
     
     # Header
-    lines.append(f"# Community Board Meeting — {ms.meeting_date}")
+    lines.append(f"# Community Board Meeting, Analyzed on: {ms.meeting_date}")
     lines.append("")
     
     # Overall meeting summary (if available as a custom field)
@@ -99,7 +99,7 @@ def md_from_summary(ms: MeetingSummary) -> str:
         if topic.action_items:
             lines.append("### Action Items")
             for ai in topic.action_items:
-                lines.append(f"- **{ai.task}**")
+                lines.append(f"- {ai.task}**")
                 lines.append(f"  - Owner: {ai.owner}")
                 lines.append(f"  - Due: {ai.due}")
             lines.append("")

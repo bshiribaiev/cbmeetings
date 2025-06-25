@@ -1,5 +1,5 @@
 from typing import List, Literal, Dict
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel
 
 class ActionItem(BaseModel):
     task: str

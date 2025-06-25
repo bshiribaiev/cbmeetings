@@ -1,5 +1,4 @@
-import json, textwrap, google.generativeai as genai
-from pathlib import Path
+import json, google.generativeai as genai
 from pydantic import ValidationError
 from summary_schema import MeetingSummary, Topic
 import os
@@ -25,46 +24,44 @@ CRITICAL REQUIREMENTS:
 """.strip()
 
 def call_gemini(system_prompt: str, user_text: str) -> str:
-    # Combine system prompt and user text into a single prompt
     combined_prompt = f"{system_prompt}\n\n{user_text}"
     
     rsp = MODEL.generate_content(
         combined_prompt,
         generation_config={
             "temperature": 0.2,
-            "max_output_tokens": 4096,  # Increased for more detailed summaries
+            "max_output_tokens": 5096,  # Increased for more detailed summaries
         },
     )
     return rsp.text.strip()
 
-# --- map-reduce driver -------------------------------------------------
-CHUNK_LEN = 12000  # chars; ~2k tokens – safe for Flash
+CHUNK_LEN = 12000  
 
 def chunk_text(text: str, size: int = CHUNK_LEN):
     for i in range(0, len(text), size):
         yield text[i : i + size]
 
 def summarize_transcript(full_txt: str, meeting_date: str) -> MeetingSummary:
-    """Map-reduce: 1) topic snippets per chunk, 2) combine."""
     partials = []
     
     # First pass: Extract detailed topics from each chunk
     for i, chunk in enumerate(chunk_text(full_txt)):
-        chunk_prompt = f"""Analyze this Community Board meeting transcript chunk #{i+1}.
+        chunk_prompt = f"""
+                            Analyze this Community Board meeting transcript chunk #{i+1}.
 
-Extract detailed topics with these requirements:
-- Create informative topic titles that describe WHAT is being discussed
-- Write 2-4 sentence summaries explaining the SUBSTANCE of discussion
-- Include specific proposals, concerns, and decisions
-- Note who spoke and WHAT they said
-- Include any vote counts, addresses, or specific details
+                            Extract detailed topics with these requirements:
+                            - Create informative topic titles that describe WHAT is being discussed
+                            - Write 2-4 sentence summaries explaining the SUBSTANCE of discussion
+                            - Include specific proposals, concerns, and decisions
+                            - Note who spoke and WHAT they said
+                            - Include any vote counts, addresses, or specific details
 
-Transcript chunk:
-```
-{chunk}
-```
+                            Transcript chunk:
+                            ```
+                            {chunk}
+                            ```
 
-Return JSON array "topics" with detailed summaries following the schema."""
+                            Return JSON array "topics" with detailed summaries following the schema."""
 
         system_with_schema = SYSTEM_PROMPT + f"\n\nJSON Schema:\n{json.dumps(Topic.model_json_schema(), indent=2)}"
         
@@ -94,23 +91,21 @@ Return JSON array "topics" with detailed summaries following the schema."""
     # Reduce step: Consolidate into comprehensive summary
     reduce_prompt = f"""Create a COMPREHENSIVE meeting summary from these topic segments.
 
-REQUIREMENTS:
-1. Merge related topics but keep ALL substantive details
-2. Create an overall summary that is 2-3 paragraphs explaining:
-   - The main purpose and type of meeting
-   - The KEY topics discussed with specific details
-   - Major decisions, votes, or actions taken
-   - Important concerns raised by the community
-3. Each topic summary must explain WHAT was discussed, not just list topics
-4. Include specific examples, quotes, or proposals where available
-5. Attendance should specify roles and what people contributed
+                        REQUIREMENTS:
+                        1. Merge related topics but keep ALL substantive details
+                        2. Create an overall summary that is 2-3 paragraphs explaining:
+                        - The main purpose and type of meeting
+                        - The KEY topics discussed with specific details
+                        - Major decisions, votes, or actions taken
+                        - Important concerns raised by the community
+                        3. Each topic summary must explain WHAT was discussed, not just list topics
+                        4. Include specific examples, quotes, or proposals where available
+                        5. Attendance should specify roles and what people contributed
 
-Meeting date: {meeting_date}
+                        Topic segments to consolidate:
+                        {json.dumps(partials, indent=2)}
 
-Topic segments to consolidate:
-{json.dumps(partials, indent=2)}
-
-Create a detailed, informative summary that someone who missed the meeting would find useful."""
+                        Create a detailed, informative summary that someone who missed the meeting would find useful."""
 
     system_final = SYSTEM_PROMPT + f"\n\nJSON Schema:\n{json.dumps(MeetingSummary.model_json_schema(), indent=2)}"
     raw_final = call_gemini(system_final, reduce_prompt)

@@ -44,34 +44,6 @@
   margin-top: 1.5rem;
 }
 
-.stat-card {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  background: #f8fafc;
-  padding: 1.5rem;
-  border-radius: 1rem;
-  text-align: center;
-  border: 1px solid #e2e8f0;
-  transition: all 0.3s ease;
-}
-
-.stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-}
-
-.stat-number {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: #2d3748;
-  margin-top: 0.5rem;
-}
-
-.stat-label {
-  font-size: 0.875rem;
-  color: #718096;
-  margin-top: 0.25rem;
-}
-
 /* Card styles */
 .card {
   background: white;
@@ -535,27 +507,27 @@
 
 /* Sentiment indicators */
 .sentiment-positive {
-  background: linear-gradient(135deg, #c6f6d5 0%, #9ae6b4 100%);
-  color: #22543d;
-  border: 1px solid #68d391;
+  background: whitesmoke;
+  color: black;
+  border: 1px solid black;
 }
 
 .sentiment-mixed {
-  background: linear-gradient(135deg, #fef5e7 0%, #fbd38d 100%);
-  color: #744210;
-  border: 1px solid #f6ad55;
+  background: whitesmoke;
+  color: black;
+  border: 1px solid black;
 }
 
 .sentiment-negative {
-  background: linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%);
-  color: #742a2a;
-  border: 1px solid #fc8181;
+  background: whitesmoke;
+  color: black;
+  border: 1px solid black;
 }
 
 .sentiment-optimistic {
-  background: linear-gradient(135deg, #fefcbf 0%, #faf089 100%);
-  color: #744210;
-  border: 1px solid #f6e05e;
+  background: whitesmoke;
+  color: black;
+  border: 1px solid black;
 }
 
 /* Utility classes */
