@@ -80,7 +80,6 @@ def md_from_summary(ms: MeetingSummary) -> str:
         # Topic metadata
         if topic.speakers:
             lines.append(f"**Speakers:** {', '.join(topic.speakers)}")
-        lines.append(f"**Sentiment:** {topic.sentiment.title()}")
         lines.append("")
         
         # Topic summary - should be detailed
@@ -107,14 +106,12 @@ def md_from_summary(ms: MeetingSummary) -> str:
     return "\n".join(lines)
 
 def format_attendance(attendance: dict) -> str:
-    """Format attendance information in a readable way"""
     if not attendance:
         return "Not specified"
     
     parts = []
     for key, value in attendance.items():
-        # Convert key from snake_case to readable format
         readable_key = key.replace('_', ' ').title()
         parts.append(f"{readable_key}: {value}")
-    
+        
     return ", ".join(parts)

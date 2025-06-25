@@ -6,34 +6,40 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  margin: 0 auto;
 }
 
 .max-width-container {
-  max-width: 1200px;
-  margin: 0 auto;
+  max-width: 900px;
   padding: 2rem 1rem;
 }
 
+@media(min-width: 1200px) {
+  .app-container {
+    margin: 0 20%;
+  }
+}
+
 @media(max-width: 1200px) {
-  .max-width-container {
+  .app-container {
     margin: 0 15%;
   }
 }
 
 @media(max-width: 900px) {
-  .max-width-container {
+  .app-container {
     margin: 0 10%;
   }
 }
 
 @media(max-width: 800px) {
-  .max-width-container {
+  .app-container {
     margin: 0 5%;
   }
 }
 
 @media(max-width: 700px) {
-  .max-width-container {
+  .app-container {
     margin: 0 auto;
   }
 }
