@@ -15,7 +15,11 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from enhanced_analyzer import EnhancedCBAnalyzer, VoteRecord
+from enhanced_analyzer import EnhancedCBAnalyzer
+from fetch_videos import CBChannelFetcher
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
+from typing import Optional
 
 # Import the summarization modules
 from summarize import summarize_transcript
@@ -713,6 +717,8 @@ class CBProcessor:
 
 # Initialize processor
 processor = CBProcessor()
+cb_fetcher = CBChannelFetcher()
+executor = ThreadPoolExecutor(max_workers=2)
 
 # API Endpoints
 @app.on_event("startup")
@@ -770,7 +776,11 @@ async def process_youtube_video(request: ProcessRequest):
         video_info = processor.extract_video_info(request.url)
         video_id = video_info['video_id']
         title = video_info['title']
-
+        cb_number = cb_fetcher.infer_cb_from_title(video_info['title'])
+        
+        if cb_number:
+            logger.info(f"Detected CB{cb_number} from title: {title}")
+            
         # Check if it looks like a meeting
         if not processor.is_meeting_video(title, video_info.get('description', '')):
             logger.warning(f"Video may not be a meeting: {title}")
@@ -862,7 +872,8 @@ async def process_youtube_video(request: ProcessRequest):
                     "mainTopics": [topic.title for topic in summary_obj.topics],
                     "importantDates": [],
                     "budgetItems": [],
-                    "addresses": []
+                    "addresses": [],
+                    "summary_markdown": summary_md
                 }
 
                 # Extract decisions and action items from topics
@@ -886,7 +897,27 @@ async def process_youtube_video(request: ProcessRequest):
                 # Step 4: Save results
                 processor.save_analysis(video_id, analysis, transcript, processing_time, method="gemini-summary")
                 processor.generate_summary_file(video_id, title, summary_md)
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
 
+                # First, ensure the video is in processed_videos table
+                cursor.execute('''
+                    INSERT OR REPLACE INTO processed_videos 
+                    (video_id, title, url, published_at, processed_at, status, cb_number, cb_district)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                    video_id,
+                    title,
+                    request.url,
+                    video_info.get('upload_date', datetime.now().isoformat()),
+                    datetime.now().isoformat(),
+                    'completed',
+                    cb_number,
+                    'Manhattan' if cb_number else None
+                ))
+
+                conn.commit()
+                conn.close()
                 logger.info(f"Processing completed in {processing_time:.1f} seconds")
 
                 return {
@@ -1012,7 +1043,8 @@ async def process_uploaded_file(file: UploadFile = File(...)):
                 "mainTopics": [topic.title for topic in summary_obj.topics],
                 "importantDates": [],
                 "budgetItems": [],
-                "addresses": []
+                "addresses": [],
+                "summary_markdown": summary_md 
             }
 
             # Extract decisions and action items from topics
@@ -1151,6 +1183,183 @@ async def general_exception_handler(request, exc):
         status_code=500,
         content={"detail": f"Internal server error: {str(exc)}"}
     )
+
+@app.get("/api/cb/list")
+async def get_cb_list():
+    """Get list of all community boards"""
+    boards = []
+    for key, info in CBChannelFetcher.CB_CHANNELS.items():
+        boards.append({
+            "key": key,
+            "number": info['number'],
+            "name": info['name'],
+            "district": info['district'],
+            "has_channel": bool(info['url'])
+        })
+    
+    boards.sort(key=lambda x: x['number'])
+    return {"boards": boards}
+
+@app.get("/api/cb/{cb_number}/meetings")
+async def get_cb_meetings(cb_number: int, limit: int = 20):
+    """Get processed meetings for a specific CB"""
+    try:
+        meetings = cb_fetcher.get_processed_meetings_by_cb(cb_number, limit)
+        
+        # Parse the analysis JSON
+        for meeting in meetings:
+            if meeting.get('analysis'):
+                try:
+                    meeting['analysis'] = json.loads(meeting['analysis'])
+                except:
+                    meeting['analysis'] = None
+        
+        return {
+            "cb_number": cb_number,
+            "meetings": meetings,
+            "total": len(meetings)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get CB{cb_number} meetings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/cb/{cb_key}/fetch-videos")
+async def fetch_cb_videos(cb_key: str, max_results: int = 30):
+    """Fetch new videos from a CB channel"""
+    try:
+        # Run in background to avoid blocking
+        loop = asyncio.get_event_loop()
+        videos = await loop.run_in_executor(
+            executor, 
+            cb_fetcher.fetch_channel_videos, 
+            cb_key, 
+            max_results
+        )
+        
+        # Save new videos
+        new_count = 0
+        for video in videos:
+            if cb_fetcher.save_video_info(video):
+                new_count += 1
+        
+        return {
+            "cb_key": cb_key,
+            "videos_found": len(videos),
+            "new_videos": new_count
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch videos for {cb_key}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/cb/process-pending")
+async def process_pending_videos(cb_number: Optional[int] = None, limit: int = 5):
+    """Process pending videos (can be called periodically)"""
+    try:
+        pending = cb_fetcher.get_pending_videos(cb_number, limit)
+        
+        processing_tasks = []
+        for video in pending:
+            # Mark as processing
+            cb_fetcher.mark_video_processed(video['video_id'], 'processing')
+            
+            # Add to processing queue
+            processing_tasks.append({
+                "video_id": video['video_id'],
+                "title": video['title'],
+                "url": video['url'],
+                "cb_number": video['cb_number']
+            })
+        
+        return {
+            "pending_count": len(pending),
+            "processing": processing_tasks
+        }
+    except Exception as e:
+        logger.error(f"Failed to get pending videos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/cb/process-video/{video_id}")
+async def process_cb_video(video_id: str):
+    """Process a specific video from the queue"""
+    try:
+        # Get video info
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT url, title, cb_number FROM processed_videos WHERE video_id = ?', 
+            (video_id,)
+        )
+        video_info = cursor.fetchone()
+        conn.close()
+        
+        if not video_info:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        url, title, cb_number = video_info
+        
+        # Process the video using existing logic
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Extract audio
+            audio_path, _ = processor.extract_audio_from_youtube(url, temp_dir)
+            
+            # Transcribe
+            transcript = processor.transcribe_audio(audio_path)
+            processor.save_full_transcript(video_id, transcript)
+            
+            # Analyze with Gemini
+            meeting_date = processor.extract_meeting_date(title, transcript)
+            if not meeting_date:
+                meeting_date = datetime.now().date().isoformat()
+            
+            summary_obj, summary_md = processor.summarize_with_gemini(transcript, meeting_date)
+            
+            # Convert to analysis format
+            analysis = {
+                "summary": summary_obj.model_dump()["topics"][0]["summary"] if summary_obj.topics else "",
+                "keyDecisions": [],
+                "publicConcerns": [],
+                "nextSteps": [],
+                "sentiment": summary_obj.overall_sentiment,
+                "attendance": processor.format_attendance_string(summary_obj.attendance),
+                "mainTopics": [t.title for t in summary_obj.topics],
+                "cb_number": cb_number,
+                 "summary_markdown": summary_md 
+            }
+            
+            # Extract decisions and actions
+            for topic in summary_obj.topics:
+                for decision in topic.decisions:
+                    analysis["keyDecisions"].append({
+                        "item": f"{topic.title}: {decision}",
+                        "outcome": "Decided",
+                        "vote": "See transcript",
+                        "details": f"Part of {topic.title} discussion"
+                    })
+                
+                for action in topic.action_items:
+                    analysis["nextSteps"].append(
+                        f"{action.task} (Owner: {action.owner}, Due: {action.due})"
+                    )
+            
+            # Save analysis
+            processor.save_analysis(video_id, analysis, transcript, 0, "auto-process")
+            
+            # Mark as completed
+            cb_fetcher.mark_video_processed(video_id, 'completed')
+            
+            return {
+                "success": True,
+                "video_id": video_id,
+                "title": title,
+                "cb_number": cb_number,
+                "analysis": analysis
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to process video {video_id}: {e}")
+        # Mark as failed
+        cb_fetcher.mark_video_processed(video_id, 'failed')
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
