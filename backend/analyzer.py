@@ -32,7 +32,7 @@ class VoteRecord:
     raw_text: str
     confidence: float = 1.0
 
-class EnhancedCBAnalyzer:
+class CBAnalyzer:
     def __init__(self):
         self.cb_context = """
         CONTEXT: Community Board (CB) meetings are NYC local government meetings where:

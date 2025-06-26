@@ -21,6 +21,8 @@ interface MeetingAnalysis {
   mainTopics: string[];
   processingTime: string;
   summary_markdown?: string;
+  cb_number?: number;
+  url?: string; // Add URL to the interface
 }
 
 const App = () => {
@@ -112,19 +114,35 @@ const App = () => {
   };
 
   const handleSelectMeeting = (meeting: any) => {
+    console.log('handleSelectMeeting called with:', meeting);
+    
+    // Parse analysis if it's a string
+    let analysis = meeting.analysis;
+    if (typeof analysis === 'string') {
+      try {
+        analysis = JSON.parse(analysis);
+      } catch (e) {
+        console.error('Failed to parse analysis:', e);
+      }
+    }
+    
     // Show the meeting analysis
-    if (meeting.analysis) {
+    if (analysis) {
+      const cbNum = meeting.cb_number || extractCBNumber(meeting.title);
+      
       const analysisData = {
         title: meeting.title,
-        summary: meeting.analysis.summary || '',
-        keyDecisions: meeting.analysis.keyDecisions || [],
-        publicConcerns: meeting.analysis.publicConcerns || [],
-        nextSteps: meeting.analysis.nextSteps || [],
-        sentiment: meeting.analysis.sentiment || 'Mixed',
-        attendance: meeting.analysis.attendance || 'Not specified',
-        mainTopics: meeting.analysis.mainTopics || [],
+        summary: analysis.summary || '',
+        keyDecisions: analysis.keyDecisions || [],
+        publicConcerns: analysis.publicConcerns || [],
+        nextSteps: analysis.nextSteps || [],
+        sentiment: analysis.sentiment || 'Mixed',
+        attendance: analysis.attendance || 'Not specified',
+        mainTopics: analysis.mainTopics || [],
         processingTime: 'Previously processed',
-        summary_markdown: meeting.analysis.summary_markdown
+        summary_markdown: analysis.summary_markdown,
+        cb_number: cbNum ? parseInt(cbNum.toString()) : undefined,
+        url: meeting.url // Pass the URL
       };
       
       // If no markdown exists, generate it from the analysis data
@@ -189,11 +207,9 @@ const App = () => {
         summary_markdown: result.summary_markdown
       });
 
-    } catch (error: unknown) {
+    } catch (error) {
       console.error('Processing error:', error);
-    
-      const message = error instanceof Error ? error.message : String(error);
-      alert(`Processing failed: ${message}`);
+      alert(`Processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -323,13 +339,63 @@ const App = () => {
                 {analysis.title}
               </h2>
 
+              {analysis.url && (
+                <div style={{ marginBottom: '2rem' }}>
+                  <a 
+                    href={analysis.url} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      color: '#3182ce',
+                      textDecoration: 'none',
+                      fontSize: '1rem',
+                      fontWeight: '500',
+                      padding: '0.5rem 1rem',
+                      borderRadius: '0.5rem',
+                      background: '#ebf8ff',
+                      border: '1px solid #90cdf4',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = '#bee3f8';
+                      e.currentTarget.style.borderColor = '#3182ce';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = '#ebf8ff';
+                      e.currentTarget.style.borderColor = '#90cdf4';
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    Watch on YouTube
+                  </a>
+                </div>
+              )}
+
               <MarkdownRenderer markdown={analysis.summary_markdown || generateMarkdownFromAnalysis(analysis)} />
 
-              <div style={{ marginTop: '3rem' }}>
+              <div style={{ marginTop: '3rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                 <button onClick={resetProcessor} className="btn btn-primary">
                   <ArrowLeft size={16} />
                   Process Another Meeting
                 </button>
+                
+                {analysis.cb_number && (
+                  <button 
+                    onClick={() => {
+                      setSelectedCB(analysis.cb_number || null);
+                      setCurrentView('meetings');
+                      setAnalysis(null);
+                    }} 
+                    className="btn btn-secondary"
+                  >
+                    Back to CB{analysis.cb_number} Meetings
+                  </button>
+                )}
               </div>
             </div>
           </div>

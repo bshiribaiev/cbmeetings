@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 import re
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +36,41 @@ class CBChannelFetcher:
     
     def __init__(self, db_path: str = "cb_meetings.db"):
         self.db_path = db_path
+        # Configure SQLite for better concurrency
         self.setup_database()
+    
+    def get_db_connection(self):
+        """Get a database connection with optimal settings for concurrent access"""
+        conn = sqlite3.connect(self.db_path, timeout=30.0)  # 30 second timeout
+        conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
+        conn.execute("PRAGMA busy_timeout=5000")  # 5 second busy timeout
+        return conn
     
     def setup_database(self):
         """Extended database schema to track CB affiliation"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self.get_db_connection()
         cursor = conn.cursor()
         
         # Add cb_number column to existing tables if not present
         try:
             cursor.execute('ALTER TABLE processed_videos ADD COLUMN cb_number INTEGER')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+            
+        try:
             cursor.execute('ALTER TABLE processed_videos ADD COLUMN cb_district TEXT')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+            
+        try:
             cursor.execute('ALTER TABLE processed_videos ADD COLUMN channel_source TEXT')
         except sqlite3.OperationalError:
-            pass  # Columns already exist
+            pass  # Column already exists
+            
+        try:
+            cursor.execute('ALTER TABLE processed_videos ADD COLUMN processing_attempts INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         
         # Create index for faster CB queries
         cursor.execute('''
@@ -222,37 +244,86 @@ class CBChannelFetcher:
         conn.commit()
         conn.close()
     
+    # The issue is likely in the fetch_videos.py file where the connection isn't being closed properly
+# or there's an exception that's not being caught.
+
+# In fetch_videos.py, update the get_processed_meetings_by_cb method:
+
     def get_processed_meetings_by_cb(self, cb_number: int, limit: int = 20) -> List[Dict]:
-        """Get processed meetings for a specific CB"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT 
-                p.video_id, p.title, p.url, p.published_at, p.processed_at,
-                m.analysis_json, m.transcript_length
-            FROM processed_videos p
-            JOIN meeting_analysis m ON p.video_id = m.video_id
-            WHERE p.cb_number = ? AND p.status = 'completed'
-            ORDER BY p.published_at DESC
-            LIMIT ?
-        ''', (cb_number, limit))
+        """Get all meetings for a specific CB (all statuses)"""
+        logger.info(f"Starting to fetch meetings for CB{cb_number}")
         
         meetings = []
-        for row in cursor.fetchall():
-            meetings.append({
-                'video_id': row[0],
-                'title': row[1],
-                'url': row[2],
-                'published_at': row[3],
-                'processed_at': row[4],
-                'analysis': row[5],  # JSON string
-                'transcript_length': row[6]
-            })
+        conn = None
         
-        conn.close()
-        return meetings
-    
+        try:
+            # Use read-only connection with shorter timeout
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # Set pragmas for read-only optimization
+            cursor.execute("PRAGMA query_only = ON")
+            cursor.execute("PRAGMA temp_store = MEMORY")
+            
+            logger.info(f"Database connected, executing query for CB{cb_number}")
+            
+            # Modified query to handle processing status better
+            cursor.execute('''
+                SELECT 
+                    p.video_id, p.title, p.url, p.published_at, p.processed_at,
+                    p.status, p.cb_number, 
+                    CASE 
+                        WHEN p.status = 'processing' THEN NULL 
+                        ELSE m.analysis_json 
+                    END as analysis_json,
+                    m.transcript_length
+                FROM processed_videos p
+                LEFT JOIN meeting_analysis m ON p.video_id = m.video_id
+                WHERE p.cb_number = ?
+                ORDER BY p.published_at DESC
+                LIMIT ?
+            ''', (cb_number, limit))
+            
+            rows = cursor.fetchall()
+            logger.info(f"Query complete, found {len(rows)} meetings")
+            
+            for row in rows:
+                try:
+                    meeting = {
+                        'video_id': row['video_id'],
+                        'title': row['title'],
+                        'url': row['url'],
+                        'published_at': row['published_at'],
+                        'processed_at': row['processed_at'],
+                        'status': row['status'],
+                        'cb_number': row['cb_number'] if 'cb_number' in row.keys() else None,
+                        'analysis': row['analysis_json'],
+                        'transcript_length': row['transcript_length']
+                    }
+                    meetings.append(meeting)
+                except Exception as e:
+                    logger.error(f"Error processing row: {e}")
+                    continue
+            
+            logger.info(f"Successfully processed {len(meetings)} meetings")
+            return meetings
+        
+        except sqlite3.OperationalError as e:
+            logger.error(f"Database operational error: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error in get_processed_meetings_by_cb: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return []
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                    logger.info("Database connection closed")
+                except Exception as e:
+                    logger.error(f"Error closing connection: {e}")
+
     def update_existing_video_cb(self, video_id: str, cb_number: int, cb_district: str = 'Manhattan'):
         """Update CB info for existing videos based on title analysis"""
         conn = sqlite3.connect(self.db_path)

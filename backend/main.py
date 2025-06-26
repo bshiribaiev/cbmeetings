@@ -4,30 +4,32 @@ import json
 import sqlite3
 import time
 import logging
-from datetime import datetime, date
-from pathlib import Path
-from typing import List, Dict
 import subprocess
 import traceback
+import re
+import asyncio
+
+# AI and processing imports
+import whisper
+import yt_dlp
 
 # FastAPI and server imports
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from enhanced_analyzer import EnhancedCBAnalyzer
+from analyzer import CBAnalyzer
 from fetch_videos import CBChannelFetcher
 from concurrent.futures import ThreadPoolExecutor
-import asyncio
 from typing import Optional
+from datetime import datetime, date
+from pathlib import Path
+from typing import List, Dict
+from db_handler import DBHandler
 
 # Import the summarization modules
 from summarize import summarize_transcript
 from render_md import md_from_summary
-
-# AI and processing imports
-import whisper
-import yt_dlp
 
 # Configure logging with more detailed format
 logging.basicConfig(
@@ -47,11 +49,9 @@ class ProcessRequest(BaseModel):
 
 class HealthStatus(BaseModel):
     whisper: bool
-    ollama: bool
     ffmpeg: bool
     yt_dlp: bool
     database: bool
-    ollama_models: List[str] = []
 
 class MeetingAnalysis(BaseModel):
     summary: str
@@ -82,7 +82,7 @@ app.add_middleware(
         "http://127.0.0.1:3001",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "*"  # TEMPORARY - for development
+        "*"  # temporary
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -103,13 +103,34 @@ class CBProcessor:
     def setup_directories(self):
         output_dir.mkdir(exist_ok=True)
 
+    # Getting database connection with concurrent read and write
+    def get_db_connection(self):
+        conn = sqlite3.connect(db_path, timeout=30.0)  # 30 second timeout
+        conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
+        conn.execute("PRAGMA busy_timeout=5000")  # 5 second busy timeout
+        return conn
+    
+    # Initializing a database
     def init_database(self):
         try:
-            conn = sqlite3.connect(db_path)
+            conn = self.get_db_connection()
             cursor = conn.cursor()
 
-            # Create tables with better error handling
-            cursor.execute('''
+            self.create_processed(cursor)
+            self.create_meet_analysis(cursor)
+            self.create_system_logs(cursor)
+
+            conn.commit()
+            conn.close()
+            logger.info("Database initialized successfully")
+
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
+            raise
+    
+    # Creating a table in database
+    def create_processed(self, cursor):
+        cursor.execute('''
                 CREATE TABLE IF NOT EXISTS processed_videos (
                     video_id TEXT PRIMARY KEY,
                     title TEXT,
@@ -123,8 +144,10 @@ class CBProcessor:
                     processing_attempts INTEGER DEFAULT 0
                 )
             ''')
-
-            cursor.execute('''
+    
+    # Creating a table in database
+    def create_meet_analysis(self, cursor):
+        cursor.execute('''
                 CREATE TABLE IF NOT EXISTS meeting_analysis (
                     video_id TEXT PRIMARY KEY,
                     analysis_json TEXT,
@@ -135,8 +158,10 @@ class CBProcessor:
                     FOREIGN KEY (video_id) REFERENCES processed_videos (video_id)
                 )
             ''')
-
-            cursor.execute('''
+    
+    # Creating a table in database
+    def create_system_logs(self, cursor):
+        cursor.execute('''
                 CREATE TABLE IF NOT EXISTS system_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp TEXT,
@@ -146,14 +171,7 @@ class CBProcessor:
                 )
             ''')
 
-            conn.commit()
-            conn.close()
-            logger.info("Database initialized successfully")
-
-        except Exception as e:
-            logger.error(f"Database initialization failed: {e}")
-            raise
-
+    # Load Whisper AI
     def load_models(self):
         global whisper_model
 
@@ -166,17 +184,19 @@ class CBProcessor:
             logger.error(f"Model loading failed: {e}")
             raise
 
+    
     def check_ffmpeg(self) -> bool:
         return shutil.which("ffmpeg") is not None
 
+    # Get clean video url
     def clean_youtube_url(self, url: str) -> str:
-        import re
         match = re.search(r'[?&]v=([^&]+)', url)
         if match:
             video_id = match.group(1)
             return f"https://www.youtube.com/watch?v={video_id}"
         return url
 
+    # Get video info
     def extract_video_info(self, url: str) -> Dict:
         try:
             clean_url = self.clean_youtube_url(url)
@@ -195,12 +215,13 @@ class CBProcessor:
                     'upload_date': info.get('upload_date', ''),
                     'uploader': info.get('uploader', ''),
                     'description': info.get('description', '')
-                }
+                    }
 
         except Exception as e:
             logger.error(f"Failed to extract video info: {e}")
             raise HTTPException(status_code=400, detail=f"Failed to extract video info: {str(e)}")
 
+    # Determine if it is a real meeting
     def is_meeting_video(self, title: str, description: str = "") -> bool:
         meeting_keywords = [
             'board meeting', 'full board', 'committee meeting',
@@ -460,7 +481,7 @@ class CBProcessor:
             logger.info(f"Analyzing transcript with Gemini: {transcript_length:,} chars, {word_count:,} words")
             
             # Use enhanced analyzer with Gemini
-            analyzer = EnhancedCBAnalyzer()
+            analyzer = CBAnalyzer()
             
             # Perform analysis with Gemini (model parameter is ignored as Gemini is configured in the analyzer)
             result = analyzer.analyze_cb_meeting(transcript, model='gemini', title=title)
@@ -601,7 +622,7 @@ class CBProcessor:
 
     def save_analysis(self, video_id: str, analysis: Dict, transcript: str, processing_time: float, method: str = "enhanced"):
         try:
-            conn = sqlite3.connect(db_path)
+            conn = self.get_db_connection()
             cursor = conn.cursor()
 
             cursor.execute('''
@@ -635,7 +656,7 @@ class CBProcessor:
                 f.write(formatted_transcript)
 
             # Update database
-            conn = sqlite3.connect(db_path)
+            conn = self.get_db_connection()
             cursor = conn.cursor()
 
             try:
@@ -719,6 +740,7 @@ class CBProcessor:
 processor = CBProcessor()
 cb_fetcher = CBChannelFetcher()
 executor = ThreadPoolExecutor(max_workers=2)
+db_handler = DBHandler()
 
 # API Endpoints
 @app.on_event("startup")
@@ -744,23 +766,18 @@ async def root():
 @app.get("/health")
 async def health_check():
     try:
-        conn = sqlite3.connect(db_path)
+        conn = processor.get_db_connection()
         conn.execute("SELECT 1")
         conn.close()
         db_status = True
     except:
         db_status = False
 
-    ollama_status = False
-    ollama_models = []
-
     status = HealthStatus(
         whisper=whisper_model is not None,
-        ollama=ollama_status,
         ffmpeg=processor.check_ffmpeg(),
         yt_dlp=True,
         database=db_status,
-        ollama_models=ollama_models
     )
 
     return status
@@ -785,6 +802,24 @@ async def process_youtube_video(request: ProcessRequest):
         if not processor.is_meeting_video(title, video_info.get('description', '')):
             logger.warning(f"Video may not be a meeting: {title}")
 
+        # Mark as processing immediately
+        with db_handler.get_db(readonly=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO processed_videos 
+                (video_id, title, url, published_at, processed_at, status, cb_number, cb_district)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                video_id,
+                title,
+                request.url,
+                video_info.get('upload_date', datetime.now().isoformat()),
+                datetime.now().isoformat(),
+                'processing',
+                cb_number,
+                'Manhattan' if cb_number else None
+            ))
+
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 # Step 1: Extract audio
@@ -795,7 +830,12 @@ async def process_youtube_video(request: ProcessRequest):
                 # Step 2: Transcribe
                 logger.info("Transcribing audio...")
                 transcript = processor.transcribe_audio(audio_path)
+                
+                # Save transcript immediately (quick operation)
                 processor.save_full_transcript(video_id, transcript)
+                
+                # Update database with transcript info
+                db_handler.save_analysis_incremental(video_id, {}, transcript)
 
                 # Step 3: Summarize with new logic
                 logger.info("Summarizing transcript with Gemini...")
@@ -815,14 +855,13 @@ async def process_youtube_video(request: ProcessRequest):
                 summary_json = summary_obj.model_dump(mode="json")
                 
                 # Transform to match the expected API response format
-                # Create a detailed summary from the topics
                 summary_parts = []
-                
+
                 # First paragraph: Meeting type and overview
                 topic_titles = [t.title for t in summary_obj.topics]
                 meeting_type = processor.identify_meeting_type(title, topic_titles)
                 summary_parts.append(f"{meeting_type} held on {summary_obj.meeting_date} with {len(summary_obj.topics)} main topics discussed.")
-                
+
                 # Second paragraph: Key topics with details
                 if summary_obj.topics:
                     topic_details = []
@@ -832,36 +871,36 @@ async def process_youtube_video(request: ProcessRequest):
                             detail += f" (presented by {', '.join(topic.speakers[:2])})"
                         topic_details.append(detail)
                     summary_parts.append(f"The meeting covered: {'; '.join(topic_details)}.")
-                
+
                 # Third paragraph: Key outcomes
                 total_decisions = sum(len(t.decisions) for t in summary_obj.topics)
                 total_actions = sum(len(t.action_items) for t in summary_obj.topics)
-                
+
                 outcomes = []
                 if total_decisions > 0:
                     outcomes.append(f"{total_decisions} decisions were made")
                 if total_actions > 0:
                     outcomes.append(f"{total_actions} action items were assigned")
-                
+
                 # Add specific examples
                 if summary_obj.topics and summary_obj.topics[0].decisions:
                     first_decision = summary_obj.topics[0].decisions[0]
                     outcomes.append(f"including {first_decision}")
-                
+
                 if outcomes:
                     summary_parts.append(f"Key outcomes: {', '.join(outcomes)}.")
-                
+
                 # Extract concerns from topic summaries
                 concerns = []
                 for topic in summary_obj.topics:
                     # Look for concern-related words in summaries
                     if any(word in topic.summary.lower() for word in ['concern', 'issue', 'problem', 'worry']):
                         # Extract the concern from the summary
-                        import re
                         concern_match = re.search(r'(?:concern|issue|problem|worry)(?:s|ed)?\s+(?:about|regarding|with)\s+([^.]+)', topic.summary, re.IGNORECASE)
                         if concern_match:
                             concerns.append(concern_match.group(1).strip())
-                
+
+                # NOW CREATE THE ANALYSIS DICTIONARY:
                 analysis = {
                     "summary": " ".join(summary_parts),
                     "keyDecisions": [],
@@ -894,30 +933,26 @@ async def process_youtube_video(request: ProcessRequest):
                 # Calculate processing time
                 processing_time = time.time() - start_time
 
-                # Step 4: Save results
+                # Step 4: Save results incrementally
+                db_handler.save_analysis_incremental(
+                    video_id, 
+                    analysis, 
+                    processing_time=processing_time
+                )
+                
+                # Also save using the original method for compatibility
                 processor.save_analysis(video_id, analysis, transcript, processing_time, method="gemini-summary")
                 processor.generate_summary_file(video_id, title, summary_md)
-                conn = sqlite3.connect(db_path)
-                cursor = conn.cursor()
-
-                # First, ensure the video is in processed_videos table
-                cursor.execute('''
-                    INSERT OR REPLACE INTO processed_videos 
-                    (video_id, title, url, published_at, processed_at, status, cb_number, cb_district)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                    video_id,
-                    title,
-                    request.url,
-                    video_info.get('upload_date', datetime.now().isoformat()),
-                    datetime.now().isoformat(),
-                    'completed',
-                    cb_number,
-                    'Manhattan' if cb_number else None
-                ))
-
-                conn.commit()
-                conn.close()
+                
+                # Mark as completed - this is important!
+                with db_handler.get_db(readonly=False) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE processed_videos 
+                        SET status = 'completed'
+                        WHERE video_id = ?
+                    """, (video_id,))
+                
                 logger.info(f"Processing completed in {processing_time:.1f} seconds")
 
                 return {
@@ -933,6 +968,15 @@ async def process_youtube_video(request: ProcessRequest):
                 }
 
             except Exception as e:
+                # Mark as failed
+                with db_handler.get_db(readonly=False) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE processed_videos 
+                        SET status = 'failed', error_message = ?
+                        WHERE video_id = ?
+                    """, (str(e), video_id))
+                
                 logger.error(f"Processing error: {e}")
                 logger.error(f"Full traceback: {traceback.format_exc()}")
                 raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
@@ -1090,7 +1134,7 @@ async def process_uploaded_file(file: UploadFile = File(...)):
 @app.get("/meetings")
 async def get_processed_meetings():
     try:
-        conn = sqlite3.connect(db_path)
+        conn = processor.get_db_connection()
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -1148,7 +1192,7 @@ async def analyze_existing_transcript(video_id: str):
                         break
     
         # Enhanced analyzer
-        analyzer = EnhancedCBAnalyzer()  
+        analyzer = CBAnalyzer()  
         
         # Quick analysis without full AI processing
         vote_records = analyzer.extract_all_votes(content)
@@ -1203,25 +1247,73 @@ async def get_cb_list():
 @app.get("/api/cb/{cb_number}/meetings")
 async def get_cb_meetings(cb_number: int, limit: int = 20):
     """Get processed meetings for a specific CB"""
+    logger.info(f"API called: get_cb_meetings for CB{cb_number}")
+    
     try:
-        meetings = cb_fetcher.get_processed_meetings_by_cb(cb_number, limit)
+        # Add asyncio timeout to prevent hanging
+        import asyncio
+        
+        # Run the database operation in a thread pool with timeout
+        loop = asyncio.get_event_loop()
+        meetings = await asyncio.wait_for(
+            loop.run_in_executor(
+                None, 
+                cb_fetcher.get_processed_meetings_by_cb, 
+                cb_number, 
+                limit
+            ),
+            timeout=10.0  # 10 second timeout
+        )
+        
+        logger.info(f"Got {len(meetings)} meetings from database")
         
         # Parse the analysis JSON
         for meeting in meetings:
             if meeting.get('analysis'):
                 try:
                     meeting['analysis'] = json.loads(meeting['analysis'])
-                except:
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse JSON for {meeting.get('video_id')}: {e}")
+                    meeting['analysis'] = None
+                except Exception as e:
+                    logger.error(f"Unexpected error parsing JSON: {e}")
                     meeting['analysis'] = None
         
-        return {
+        response_data = {
             "cb_number": cb_number,
             "meetings": meetings,
             "total": len(meetings)
         }
+        
+        logger.info(f"Returning response with {len(meetings)} meetings")
+        return response_data
+        
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout fetching meetings for CB{cb_number}")
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": "Database query timed out",
+                "cb_number": cb_number,
+                "meetings": [],
+                "total": 0
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to get CB{cb_number} meetings: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal server error",
+                "details": str(e),
+                "cb_number": cb_number,
+                "meetings": [],
+                "total": 0
+            }
+        )
 
 @app.post("/api/cb/{cb_key}/fetch-videos")
 async def fetch_cb_videos(cb_key: str, max_results: int = 30):
@@ -1283,7 +1375,7 @@ async def process_cb_video(video_id: str):
     """Process a specific video from the queue"""
     try:
         # Get video info
-        conn = sqlite3.connect(db_path)
+        conn = processor.get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
             'SELECT url, title, cb_number FROM processed_videos WHERE video_id = ?', 
@@ -1323,7 +1415,7 @@ async def process_cb_video(video_id: str):
                 "attendance": processor.format_attendance_string(summary_obj.attendance),
                 "mainTopics": [t.title for t in summary_obj.topics],
                 "cb_number": cb_number,
-                 "summary_markdown": summary_md 
+                "summary_markdown": summary_md 
             }
             
             # Extract decisions and actions
@@ -1360,6 +1452,91 @@ async def process_cb_video(video_id: str):
         # Mark as failed
         cb_fetcher.mark_video_processed(video_id, 'failed')
         raise HTTPException(status_code=500, detail=str(e))
+
+# Add a simpler test endpoint to verify the database is accessible:
+@app.get("/api/test/cb/{cb_number}/count")
+async def test_cb_count(cb_number: int):
+    """Simple test to count meetings without complex queries"""
+    try:
+        conn = sqlite3.connect(cb_fetcher.db_path, timeout=2.0)
+        cursor = conn.cursor()
+        
+        # Simple count query
+        cursor.execute(
+            "SELECT COUNT(*) FROM processed_videos WHERE cb_number = ?", 
+            (cb_number,)
+        )
+        count = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return {
+            "cb_number": cb_number,
+            "count": count,
+            "status": "ok"
+        }
+    except Exception as e:
+        return {
+            "cb_number": cb_number,
+            "error": str(e),
+            "status": "error"
+        }
+
+# temporary debug endpoint to your main.py to test
+
+@app.get("/api/cb/{cb_number}/meetings-debug")
+async def get_cb_meetings_debug(cb_number: int, limit: int = 20):
+    """Debug version with better error handling"""
+    logger.info(f"Debug: Fetching meetings for CB{cb_number}")
+    
+    try:
+        # Test 1: Can we connect to the database?
+        conn = processor.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM processed_videos WHERE cb_number = ?", (cb_number,))
+        total_count = cursor.fetchone()[0]
+        logger.info(f"Debug: Found {total_count} total videos for CB{cb_number}")
+        conn.close()
+        
+        # Test 2: Try the actual query
+        meetings = cb_fetcher.get_processed_meetings_by_cb(cb_number, limit)
+        logger.info(f"Debug: Retrieved {len(meetings)} meetings")
+        
+        # Test 3: Parse the analysis JSON
+        for meeting in meetings:
+            if meeting.get('analysis'):
+                try:
+                    meeting['analysis'] = json.loads(meeting['analysis'])
+                    logger.info(f"Debug: Parsed analysis for {meeting['video_id']}")
+                except Exception as e:
+                    logger.error(f"Debug: Failed to parse analysis for {meeting['video_id']}: {e}")
+                    meeting['analysis'] = None
+        
+        return {
+            "cb_number": cb_number,
+            "meetings": meetings,
+            "total": len(meetings),
+            "debug": {
+                "total_in_db": total_count,
+                "retrieved": len(meetings),
+                "timestamp": datetime.now().isoformat()
+            }
+        }
+    except Exception as e:
+        logger.error(f"Debug endpoint failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        return {
+            "cb_number": cb_number,
+            "meetings": [],
+            "total": 0,
+            "error": str(e),
+            "debug": {
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc()
+            }
+        }
 
 if __name__ == "__main__":
     import uvicorn
