@@ -14,7 +14,7 @@ import whisper
 import yt_dlp
 
 # FastAPI and server imports
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -25,7 +25,6 @@ from typing import Optional
 from datetime import datetime, date
 from pathlib import Path
 from typing import List, Dict
-from db_handler import DBHandler
 
 # Import the summarization modules
 from summarize import summarize_transcript
@@ -233,10 +232,11 @@ class CBProcessor:
         combined_text = f"{title} {description}".lower()
         return any(keyword in combined_text for keyword in meeting_keywords)
 
+    # Get audio from the video
     def extract_audio_from_youtube(self, url: str, output_path: str) -> tuple:
         try:
             clean_url = self.clean_youtube_url(url)
-            logger.info(f"🎬 Extracting audio from: {url}")
+            logger.info(f"Extracting audio from: {url}")
 
             ydl_opts = {
                 'format': 'bestaudio/best',
@@ -740,7 +740,6 @@ class CBProcessor:
 processor = CBProcessor()
 cb_fetcher = CBChannelFetcher()
 executor = ThreadPoolExecutor(max_workers=2)
-db_handler = DBHandler()
 
 # API Endpoints
 @app.on_event("startup")
@@ -803,7 +802,7 @@ async def process_youtube_video(request: ProcessRequest):
             logger.warning(f"Video may not be a meeting: {title}")
 
         # Mark as processing immediately
-        with db_handler.get_db(readonly=False) as conn:
+        with processor.get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO processed_videos 
@@ -835,7 +834,7 @@ async def process_youtube_video(request: ProcessRequest):
                 processor.save_full_transcript(video_id, transcript)
                 
                 # Update database with transcript info
-                db_handler.save_analysis_incremental(video_id, {}, transcript)
+                processor.save_analysis(video_id, {}, transcript)
 
                 # Step 3: Summarize with new logic
                 logger.info("Summarizing transcript with Gemini...")
@@ -932,20 +931,13 @@ async def process_youtube_video(request: ProcessRequest):
 
                 # Calculate processing time
                 processing_time = time.time() - start_time
-
-                # Step 4: Save results incrementally
-                db_handler.save_analysis_incremental(
-                    video_id, 
-                    analysis, 
-                    processing_time=processing_time
-                )
                 
                 # Also save using the original method for compatibility
                 processor.save_analysis(video_id, analysis, transcript, processing_time, method="gemini-summary")
                 processor.generate_summary_file(video_id, title, summary_md)
                 
                 # Mark as completed - this is important!
-                with db_handler.get_db(readonly=False) as conn:
+                with processor.get_db_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
                         UPDATE processed_videos 
@@ -969,7 +961,7 @@ async def process_youtube_video(request: ProcessRequest):
 
             except Exception as e:
                 # Mark as failed
-                with db_handler.get_db(readonly=False) as conn:
+                with processor.get_db_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
                         UPDATE processed_videos 
@@ -1130,6 +1122,197 @@ async def process_uploaded_file(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"File processing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/process-youtube-async")
+async def process_youtube_video_async(request: ProcessRequest, background_tasks: BackgroundTasks):
+    """Queue video for background processing"""
+    try:
+        # Extract video info
+        video_info = processor.extract_video_info(request.url)
+        video_id = video_info['video_id']
+        title = video_info['title']
+        
+        # Quick check if already processing
+        conn = processor.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM processed_videos WHERE video_id = ?", (video_id,))
+        existing = cursor.fetchone()
+        
+        if existing and existing[0] in ['processing', 'completed']:
+            conn.close()
+            return {
+                "success": False,
+                "message": f"Video is already {existing[0]}"
+            }
+        
+        # Mark as queued
+        cursor.execute('''
+            INSERT OR REPLACE INTO processed_videos 
+            (video_id, title, url, status, processed_at)
+            VALUES (?, ?, ?, 'queued', ?)
+        ''', (video_id, title, request.url, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+        
+        # Add to background tasks
+        background_tasks.add_task(process_video_background, video_id, request.url)
+        
+        return {
+            "success": True,
+            "message": "Video queued for processing",
+            "video_id": video_id,
+            "title": title
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def process_video_background(video_id: str, url: str):
+    """Process video in background without blocking"""
+    logger.info(f"Starting background processing for {video_id}")
+    
+    try:
+        # Mark as processing
+        conn = processor.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE processed_videos SET status = 'processing', processed_at = ? WHERE video_id = ?",
+            (datetime.now().isoformat(), video_id)
+        )
+        conn.commit()
+        conn.close()
+        
+        # Extract video info
+        video_info = processor.extract_video_info(url)
+        title = video_info['title']
+        cb_number = cb_fetcher.infer_cb_from_title(title)
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Step 1: Extract audio
+            logger.info(f"Extracting audio for {video_id}...")
+            audio_path, _ = processor.extract_audio_from_youtube(url, temp_dir)
+            
+            # Step 2: Transcribe
+            logger.info(f"Transcribing audio for {video_id}...")
+            transcript = processor.transcribe_audio(audio_path)
+            
+            # Save transcript
+            processor.save_full_transcript(video_id, transcript)
+            
+            # Step 3: Analyze
+            logger.info(f"Analyzing transcript for {video_id}...")
+            meeting_date = processor.extract_meeting_date(title, transcript)
+            if not meeting_date:
+                meeting_date = date.today().isoformat()
+            
+            summary_obj, summary_md = processor.summarize_with_gemini(
+                transcript,
+                meeting_date=meeting_date
+            )
+            
+            # Convert summary to analysis format (reuse existing logic)
+            summary_json = summary_obj.model_dump(mode="json")
+            
+            # Create analysis using existing logic
+            summary_parts = []
+            topic_titles = [t.title for t in summary_obj.topics]
+            meeting_type = processor.identify_meeting_type(title, topic_titles)
+            summary_parts.append(f"{meeting_type} held on {summary_obj.meeting_date} with {len(summary_obj.topics)} main topics discussed.")
+
+            if summary_obj.topics:
+                topic_details = []
+                for topic in summary_obj.topics[:3]:
+                    detail = f"{topic.title}"
+                    if topic.speakers:
+                        detail += f" (presented by {', '.join(topic.speakers[:2])})"
+                    topic_details.append(detail)
+                summary_parts.append(f"The meeting covered: {'; '.join(topic_details)}.")
+
+            total_decisions = sum(len(t.decisions) for t in summary_obj.topics)
+            total_actions = sum(len(t.action_items) for t in summary_obj.topics)
+
+            outcomes = []
+            if total_decisions > 0:
+                outcomes.append(f"{total_decisions} decisions were made")
+            if total_actions > 0:
+                outcomes.append(f"{total_actions} action items were assigned")
+
+            if summary_obj.topics and summary_obj.topics[0].decisions:
+                first_decision = summary_obj.topics[0].decisions[0]
+                outcomes.append(f"including {first_decision}")
+
+            if outcomes:
+                summary_parts.append(f"Key outcomes: {', '.join(outcomes)}.")
+
+            # Extract concerns
+            concerns = []
+            for topic in summary_obj.topics:
+                if any(word in topic.summary.lower() for word in ['concern', 'issue', 'problem', 'worry']):
+                    concern_match = re.search(r'(?:concern|issue|problem|worry)(?:s|ed)?\s+(?:about|regarding|with)\s+([^.]+)', topic.summary, re.IGNORECASE)
+                    if concern_match:
+                        concerns.append(concern_match.group(1).strip())
+
+            analysis = {
+                "summary": " ".join(summary_parts),
+                "keyDecisions": [],
+                "publicConcerns": concerns[:10],
+                "nextSteps": [],
+                "sentiment": summary_obj.overall_sentiment.title(),
+                "attendance": processor.format_attendance_string(summary_obj.attendance),
+                "mainTopics": [topic.title for topic in summary_obj.topics],
+                "importantDates": [],
+                "budgetItems": [],
+                "addresses": [],
+                "summary_markdown": summary_md
+            }
+
+            # Extract decisions and action items
+            for topic in summary_obj.topics:
+                for decision in topic.decisions:
+                    analysis["keyDecisions"].append({
+                        "item": f"{topic.title}: {decision}",
+                        "outcome": "Decided",
+                        "vote": "See transcript",
+                        "details": f"Part of {topic.title} discussion"
+                    })
+                
+                for action_item in topic.action_items:
+                    analysis["nextSteps"].append(
+                        f"{action_item.task} (Owner: {action_item.owner}, Due: {action_item.due})"
+                    )
+            
+            # Save analysis
+            processing_time = time.time()
+            processor.save_analysis(video_id, analysis, transcript, processing_time, method="gemini-summary")
+            processor.generate_summary_file(video_id, title, summary_md)
+            
+            # Mark as completed
+            conn = processor.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE processed_videos SET status = 'completed', processed_at = ? WHERE video_id = ?",
+                (datetime.now().isoformat(), video_id)
+            )
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Background processing completed for {video_id}")
+            
+    except Exception as e:
+        logger.error(f"Background processing failed for {video_id}: {e}")
+        
+        # Mark as failed
+        try:
+            conn = processor.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE processed_videos SET status = 'failed', error_message = ? WHERE video_id = ?",
+                (str(e)[:500], video_id)
+            )
+            conn.commit()
+            conn.close()
+        except:
+            pass
 
 @app.get("/meetings")
 async def get_processed_meetings():
@@ -1345,40 +1528,27 @@ async def fetch_cb_videos(cb_key: str, max_results: int = 30):
 
 @app.post("/api/cb/process-pending")
 async def process_pending_videos(cb_number: Optional[int] = None, limit: int = 5):
-    """Process pending videos (can be called periodically)"""
+    """Get pending videos (without marking them as processing)"""
     try:
         pending = cb_fetcher.get_pending_videos(cb_number, limit)
         
-        processing_tasks = []
-        for video in pending:
-            # Mark as processing
-            cb_fetcher.mark_video_processed(video['video_id'], 'processing')
-            
-            # Add to processing queue
-            processing_tasks.append({
-                "video_id": video['video_id'],
-                "title": video['title'],
-                "url": video['url'],
-                "cb_number": video['cb_number']
-            })
-        
         return {
             "pending_count": len(pending),
-            "processing": processing_tasks
+            "videos": pending 
         }
     except Exception as e:
         logger.error(f"Failed to get pending videos: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/cb/process-video/{video_id}")
-async def process_cb_video(video_id: str):
-    """Process a specific video from the queue"""
+async def process_cb_video(video_id: str, background_tasks: BackgroundTasks):
+    """Process a specific video from the queue using background processing"""
     try:
         # Get video info
         conn = processor.get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            'SELECT url, title, cb_number FROM processed_videos WHERE video_id = ?', 
+            'SELECT url, title, cb_number, status FROM processed_videos WHERE video_id = ?', 
             (video_id,)
         )
         video_info = cursor.fetchone()
@@ -1387,156 +1557,35 @@ async def process_cb_video(video_id: str):
         if not video_info:
             raise HTTPException(status_code=404, detail="Video not found")
         
-        url, title, cb_number = video_info
+        url, title, cb_number, status = video_info
         
-        # Process the video using existing logic
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Extract audio
-            audio_path, _ = processor.extract_audio_from_youtube(url, temp_dir)
-            
-            # Transcribe
-            transcript = processor.transcribe_audio(audio_path)
-            processor.save_full_transcript(video_id, transcript)
-            
-            # Analyze with Gemini
-            meeting_date = processor.extract_meeting_date(title, transcript)
-            if not meeting_date:
-                meeting_date = datetime.now().date().isoformat()
-            
-            summary_obj, summary_md = processor.summarize_with_gemini(transcript, meeting_date)
-            
-            # Convert to analysis format
-            analysis = {
-                "summary": summary_obj.model_dump()["topics"][0]["summary"] if summary_obj.topics else "",
-                "keyDecisions": [],
-                "publicConcerns": [],
-                "nextSteps": [],
-                "sentiment": summary_obj.overall_sentiment,
-                "attendance": processor.format_attendance_string(summary_obj.attendance),
-                "mainTopics": [t.title for t in summary_obj.topics],
-                "cb_number": cb_number,
-                "summary_markdown": summary_md 
-            }
-            
-            # Extract decisions and actions
-            for topic in summary_obj.topics:
-                for decision in topic.decisions:
-                    analysis["keyDecisions"].append({
-                        "item": f"{topic.title}: {decision}",
-                        "outcome": "Decided",
-                        "vote": "See transcript",
-                        "details": f"Part of {topic.title} discussion"
-                    })
-                
-                for action in topic.action_items:
-                    analysis["nextSteps"].append(
-                        f"{action.task} (Owner: {action.owner}, Due: {action.due})"
-                    )
-            
-            # Save analysis
-            processor.save_analysis(video_id, analysis, transcript, 0, "auto-process")
-            
-            # Mark as completed
-            cb_fetcher.mark_video_processed(video_id, 'completed')
-            
+        # Check if already processing or completed
+        if status == 'processing':
             return {
-                "success": True,
-                "video_id": video_id,
-                "title": title,
-                "cb_number": cb_number,
-                "analysis": analysis
+                "success": False,
+                "message": "Video is already being processed",
+                "video_id": video_id
             }
-            
+        elif status == 'completed':
+            return {
+                "success": False,
+                "message": "Video has already been processed",
+                "video_id": video_id
+            }
+        
+        # Queue for background processing
+        background_tasks.add_task(process_video_background, video_id, url)
+        
+        return {
+            "success": True,
+            "message": "Video queued for processing",
+            "video_id": video_id,
+            "title": title
+        }
+        
     except Exception as e:
-        logger.error(f"Failed to process video {video_id}: {e}")
-        # Mark as failed
-        cb_fetcher.mark_video_processed(video_id, 'failed')
+        logger.error(f"Failed to queue video {video_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-# Add a simpler test endpoint to verify the database is accessible:
-@app.get("/api/test/cb/{cb_number}/count")
-async def test_cb_count(cb_number: int):
-    """Simple test to count meetings without complex queries"""
-    try:
-        conn = sqlite3.connect(cb_fetcher.db_path, timeout=2.0)
-        cursor = conn.cursor()
-        
-        # Simple count query
-        cursor.execute(
-            "SELECT COUNT(*) FROM processed_videos WHERE cb_number = ?", 
-            (cb_number,)
-        )
-        count = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        return {
-            "cb_number": cb_number,
-            "count": count,
-            "status": "ok"
-        }
-    except Exception as e:
-        return {
-            "cb_number": cb_number,
-            "error": str(e),
-            "status": "error"
-        }
-
-# temporary debug endpoint to your main.py to test
-
-@app.get("/api/cb/{cb_number}/meetings-debug")
-async def get_cb_meetings_debug(cb_number: int, limit: int = 20):
-    """Debug version with better error handling"""
-    logger.info(f"Debug: Fetching meetings for CB{cb_number}")
-    
-    try:
-        # Test 1: Can we connect to the database?
-        conn = processor.get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM processed_videos WHERE cb_number = ?", (cb_number,))
-        total_count = cursor.fetchone()[0]
-        logger.info(f"Debug: Found {total_count} total videos for CB{cb_number}")
-        conn.close()
-        
-        # Test 2: Try the actual query
-        meetings = cb_fetcher.get_processed_meetings_by_cb(cb_number, limit)
-        logger.info(f"Debug: Retrieved {len(meetings)} meetings")
-        
-        # Test 3: Parse the analysis JSON
-        for meeting in meetings:
-            if meeting.get('analysis'):
-                try:
-                    meeting['analysis'] = json.loads(meeting['analysis'])
-                    logger.info(f"Debug: Parsed analysis for {meeting['video_id']}")
-                except Exception as e:
-                    logger.error(f"Debug: Failed to parse analysis for {meeting['video_id']}: {e}")
-                    meeting['analysis'] = None
-        
-        return {
-            "cb_number": cb_number,
-            "meetings": meetings,
-            "total": len(meetings),
-            "debug": {
-                "total_in_db": total_count,
-                "retrieved": len(meetings),
-                "timestamp": datetime.now().isoformat()
-            }
-        }
-    except Exception as e:
-        logger.error(f"Debug endpoint failed: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        
-        return {
-            "cb_number": cb_number,
-            "meetings": [],
-            "total": 0,
-            "error": str(e),
-            "debug": {
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc()
-            }
-        }
 
 if __name__ == "__main__":
     import uvicorn

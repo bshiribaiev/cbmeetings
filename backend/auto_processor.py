@@ -61,7 +61,7 @@ class AutonomousProcessor:
             )
             if response.ok:
                 data = response.json()
-                return data['processing']
+                return data['videos']  # Changed from 'processing' to 'videos'
             else:
                 logger.error(f"Failed to get pending videos: {response.text}")
                 return []
@@ -91,7 +91,7 @@ class AutonomousProcessor:
         """Run one processing cycle"""
         logger.info("Starting processing cycle")
         
-        # 1. Fetch new videos from CB7 (you can expand this to other boards)
+        # 1. Fetch new videos from CB7
         new_videos = await self.fetch_new_videos("cb7")
         
         # 2. Get pending videos
@@ -101,18 +101,29 @@ class AutonomousProcessor:
             logger.info("No videos pending processing")
             return
         
-        # 3. Process each video
-        for video in pending:
-            logger.info(f"Processing: {video['title']}")
-            success = await self.process_video(video['video_id'])
+        # 3. Process only ONE video at a time to avoid database locks
+        video = pending[0]  # Take only the first video
+        logger.info(f"Processing: {video['title']}")
+        
+        try:
+            # Call the process endpoint which now uses background processing
+            response = requests.post(
+                f"{self.api_base_url}/api/cb/process-video/{video['video_id']}"
+            )
             
-            if success:
-                logger.info(f"✓ Completed: {video['title']}")
+            if response.ok:
+                data = response.json()
+                if data.get('success'):
+                    logger.info(f"✓ Queued for processing: {video['title']}")
+                else:
+                    logger.warning(f"⚠ {data.get('message', 'Unknown issue')}: {video['title']}")
             else:
-                logger.error(f"✗ Failed: {video['title']}")
-            
-            # Wait between videos to avoid overloading
-            await asyncio.sleep(30)
+                logger.error(f"✗ Failed to queue video {video['video_id']}: {response.text}")
+        except Exception as e:
+            logger.error(f"✗ Error processing {video['video_id']}: {e}")
+        
+        # Process only one video per cycle
+        logger.info("Cycle complete - processed 1 video")
     
     async def run_autonomous(self, interval_minutes=60):
         """Run autonomous processing loop"""
