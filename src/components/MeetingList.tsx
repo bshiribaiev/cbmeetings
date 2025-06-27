@@ -286,8 +286,7 @@ const MeetingList: React.FC<MeetingListProps> = ({ cbNumber, onSelectMeeting }) 
   }
 
   const containerStyle = {
-    padding: '2rem 1rem',
-    maxWidth: '900px',
+    maxWidth: '720px',
     margin: '0 auto'
   };
 

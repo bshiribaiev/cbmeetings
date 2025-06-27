@@ -1,107 +1,112 @@
 from summary_schema import MeetingSummary
 
 def md_from_summary(ms: MeetingSummary) -> str:
+    """Convert the rich summary to markdown format"""
     lines = []
     
     # Header
-    lines.append(f"# Community Board Meeting, Analyzed on: {ms.meeting_date}")
+    lines.append(f"# {ms.meeting_type}")
+    lines.append(f"**Date:** {ms.meeting_date}")
     lines.append("")
     
-    # Overall meeting summary (if available as a custom field)
-    # We'll construct a detailed summary from the topics
+    # Executive Summary - This is your rich, detailed summary!
     lines.append("## Meeting Overview")
-    
-    # Create a comprehensive overview
-    if ms.topics:
-        overview_parts = []
-        
-        # Determine meeting type from topics
-        topic_titles = [t.title.lower() for t in ms.topics]
-        if any("budget" in t or "fiscal" in t for t in topic_titles):
-            meeting_type = "budget and fiscal planning"
-        elif any("parks" in t or "environment" in t for t in topic_titles):
-            meeting_type = "Parks & Environment Committee"
-        elif any("housing" in t or "development" in t for t in topic_titles):
-            meeting_type = "housing and development"
-        else:
-            meeting_type = "Community Board"
-        
-        overview_parts.append(f"This {meeting_type} meeting covered {len(ms.topics)} main areas of discussion.")
-        
-        # Summarize key topics with details
-        key_topics = []
-        for topic in ms.topics[:3]:  # First 3 topics
-            if topic.decisions:
-                key_topics.append(f"{topic.title} (with {len(topic.decisions)} decisions)")
-            else:
-                key_topics.append(topic.title)
-        
-        if key_topics:
-            overview_parts.append(f"Primary focus areas included: {', '.join(key_topics)}.")
-        
-        # Add speaker information with context
-        all_speakers = []
-        for topic in ms.topics:
-            all_speakers.extend(topic.speakers)
-        unique_speakers = list(set(all_speakers))
-        
-        if unique_speakers:
-            if len(unique_speakers) <= 5:
-                overview_parts.append(f"Key participants included {', '.join(unique_speakers[:3])}, who presented on various agenda items.")
-            else:
-                overview_parts.append(f"The meeting featured presentations from {len(unique_speakers)} speakers including board members, committee chairs, and community representatives.")
-        
-        # Add decision summary
-        total_decisions = sum(len(t.decisions) for t in ms.topics)
-        total_actions = sum(len(t.action_items) for t in ms.topics)
-        
-        if total_decisions > 0 or total_actions > 0:
-            decision_text = []
-            if total_decisions > 0:
-                decision_text.append(f"{total_decisions} decisions were made")
-            if total_actions > 0:
-                decision_text.append(f"{total_actions} action items were assigned")
-            overview_parts.append(f"During the meeting, {' and '.join(decision_text)}.")
-        
-        lines.append(" ".join(overview_parts))
-    
+    lines.append("")
+    lines.append(ms.executive_summary)
     lines.append("")
     
-    # Meeting stats
-    lines.append(f"**Overall Sentiment:** {ms.overall_sentiment.title()}")
-    lines.append(f"**Attendance:** {format_attendance(ms.attendance)}")
-    lines.append("")
+    # Meeting stats - more concise
+    if ms.total_decisions > 0 or ms.total_action_items > 0:
+        lines.append("### Key Statistics")
+        stats = []
+        if ms.total_decisions > 0:
+            stats.append(f"**Decisions Made:** {ms.total_decisions}")
+        if ms.total_action_items > 0:
+            stats.append(f"**Action Items:** {ms.total_action_items}")
+        if ms.overall_sentiment:
+            stats.append(f"**Overall Sentiment:** {ms.overall_sentiment.title()}")
+        if ms.attendance:
+            stats.append(f"**Attendance:** {format_attendance(ms.attendance)}")
+        lines.append(" | ".join(stats))
+        lines.append("")
+    
+    # Key Decisions section (if any)
+    if ms.key_decisions:
+        lines.append("## Key Decisions")
+        lines.append("")
+        for decision in ms.key_decisions:
+            lines.append(f"### {decision.item}")
+            if decision.vote:
+                lines.append(f"**Vote:** {decision.vote}")
+            lines.append(f"**Outcome:** {decision.outcome}")
+            if decision.details:
+                lines.append(f"")
+                lines.append(decision.details)
+            lines.append("")
     
     # Detailed topic sections
-    for i, topic in enumerate(ms.topics, 1):
-        lines.append(f"## {i}. {topic.title}")
+    if ms.topics:
+        lines.append("## Detailed Discussion Topics")
         lines.append("")
         
-        # Topic metadata
-        if topic.speakers:
-            lines.append(f"**Speakers:** {', '.join(topic.speakers)}")
-        lines.append("")
-        
-        # Topic summary - should be detailed
-        lines.append("### Summary")
-        lines.append(topic.summary)
-        lines.append("")
-        
-        # Decisions with details
-        if topic.decisions:
-            lines.append("### Decisions")
-            for decision in topic.decisions:
-                lines.append(f"- {decision}")
+        for i, topic in enumerate(ms.topics, 1):
+            lines.append(f"### {i}. {topic.title}")
             lines.append("")
-        
-        # Action items with full details
-        if topic.action_items:
-            lines.append("### Action Items")
-            for ai in topic.action_items:
-                lines.append(f"- {ai.task}")
-                lines.append(f"  - Owner: {ai.owner}")
-                lines.append(f"  - Due: {ai.due}")
+            
+            # Topic metadata
+            if topic.speakers:
+                lines.append(f"**Speakers:** {', '.join(topic.speakers)}")
+                lines.append("")
+            
+            # Topic summary - the detailed one
+            lines.append(topic.summary)
             lines.append("")
+            
+            # Key points if available
+            if hasattr(topic, 'key_points') and topic.key_points:
+                lines.append("**Key Points:**")
+                for point in topic.key_points:
+                    lines.append(f"- {point}")
+                lines.append("")
+            
+            # Decisions with details
+            if topic.decisions:
+                lines.append("**Decisions:**")
+                for decision in topic.decisions:
+                    lines.append(f"- {decision}")
+                lines.append("")
+            
+            # Concerns raised
+            if hasattr(topic, 'concerns_raised') and topic.concerns_raised:
+                lines.append("**Concerns Raised:**")
+                for concern in topic.concerns_raised:
+                    lines.append(f"- {concern}")
+                lines.append("")
+            
+            # Action items with full details
+            if topic.action_items:
+                lines.append("**Action Items:**")
+                for ai in topic.action_items:
+                    lines.append(f"- {ai.task}")
+                    lines.append(f"  - Owner: {ai.owner}")
+                    lines.append(f"  - Due: {ai.due}")
+                lines.append("")
+    
+    # Public Concerns section
+    if ms.public_concerns:
+        lines.append("## Public Concerns")
+        lines.append("")
+        for concern in ms.public_concerns:
+            lines.append(f"- {concern}")
+        lines.append("")
+    
+    # Next Steps section
+    if ms.next_steps:
+        lines.append("## Next Steps")
+        lines.append("")
+        for step in ms.next_steps:
+            lines.append(f"- {step}")
+        lines.append("")
     
     return "\n".join(lines)
 
