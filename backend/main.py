@@ -9,6 +9,7 @@ import traceback
 import re
 import asyncio
 import contextlib
+import os
 
 # AI and processing imports
 import whisper
@@ -467,7 +468,13 @@ async def process_single_pending_video(video_id: str, background_tasks: Backgrou
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# local 
+# if __name__ == "__main__":
+
+# Deployment
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
     import uvicorn
     uvicorn.run(
         "main:app",
