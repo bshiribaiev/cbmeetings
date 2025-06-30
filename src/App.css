@@ -109,11 +109,9 @@
   color: #1a202c;
 }
 
-
-/* --- Summary Styles --- */
 .summary-container {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-  color: #1a202c;
+  color: black;
 }
 .summary-header {
   background-color: #ffffff;
@@ -122,6 +120,11 @@
   padding: 2rem;
   margin-bottom: 2rem;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.summary-header-tag{
+  margin: 0;
+
 }
 .summary-section {
   background-color: #ffffff;
@@ -134,10 +137,7 @@
   max-width: 700px;
   line-height: 1.7;
 }
-/* ... other summary styles ... */
 
-
-/* --- General App Styles --- */
 .app-container {
   min-height: 100vh;
   padding: 0;
@@ -157,6 +157,7 @@
   padding: 2rem;
   margin-bottom: 2rem;
 }
+
 .btn {
   padding: 0.75rem 1.5rem;
   border-radius: 0.75rem;
@@ -171,14 +172,17 @@
   gap: 0.5rem;
   font-size: 0.875rem;
 }
+
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
 .btn-primary {
   background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
   color: white;
 }
+
 .btn-secondary {
   background: #f7fafc;
   color: #4a5568;

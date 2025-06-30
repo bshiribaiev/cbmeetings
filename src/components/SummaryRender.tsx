@@ -50,7 +50,6 @@ const SummaryRender = ({ summaryData, title, cbNumber }: { summaryData: any, tit
 
   return (
     <div className="summary-container">
-      {/* Header Card */}
       <div className="summary-header">
         <div className="summary-header-tag">{meeting_type || 'Meeting'}</div>
         <h1 className="summary-header-title">

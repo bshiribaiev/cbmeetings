@@ -57,7 +57,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ markdown }) => {
           font-size: 2rem;
           font-weight: 700;
           margin-bottom: 1rem;
-          margin-top: 2rem;
+          margin-top: 1rem;
           color: #1a202c;
         }
         .markdown-content h2 {

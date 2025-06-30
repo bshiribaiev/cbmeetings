@@ -193,8 +193,6 @@ const App = () => {
                         />
                     )}
                     
-                    {/* *** THIS IS THE FIX (Part 2) *** */}
-                    {/* Add buttons for navigation */}
                     <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                         <button onClick={() => {
                             setAnalysis(null);
@@ -209,7 +207,7 @@ const App = () => {
                                 setAnalysis(null);
                                 setCurrentView('meetings');
                                 // selectedCB is already set, so this will return to the correct list
-                            }} className="btn btn-secondary">
+                            }} className="btn btn-secondary" style={{background: 'white'}}>
                                 Back to CB{analysis.cb_number} Meetings
                             </button>
                         )}
