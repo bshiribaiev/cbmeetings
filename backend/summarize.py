@@ -4,7 +4,6 @@ from pydantic import ValidationError
 from summary_schema import MeetingSummary, Topic, Decision
 import os
 from dotenv import load_dotenv
-import re
 
 load_dotenv()
 
