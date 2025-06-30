@@ -46,38 +46,75 @@ output_dir = Path("processed_meetings")
 
 class CBProcessor:
     def __init__(self):
-        output_dir.mkdir(exist_ok=True)
+        # Define instance attributes
+        self.db_path = Path("cb_meetings.db")
+        self.output_dir = Path("processed_meetings")
+        
+        # Initialize
+        self.output_dir.mkdir(exist_ok=True)
         self.init_database()
         self.load_models()
 
     @contextlib.contextmanager
     def get_db_connection(self, read_only=False):
         conn = None
-        try:
-            db_uri = f"file:{db_path}?mode=ro" if read_only else str(db_path)
-            conn = sqlite3.connect(db_uri, uri=True, timeout=15.0, check_same_thread=False)
-            if not read_only:
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA busy_timeout=10000")
-            conn.row_factory = sqlite3.Row
-            yield conn
-            if not read_only: conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"Database error: {e}")
-            if conn and not read_only: conn.rollback()
-            raise
-        finally:
-            if conn: conn.close()
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count < max_retries:
+            try:
+                if read_only:
+                    db_uri = f"file:{self.db_path}?mode=ro&immutable=1"
+                    conn = sqlite3.connect(db_uri, uri=True, timeout=30.0)
+                else:
+                    conn = sqlite3.connect(str(self.db_path), timeout=30.0, isolation_level='IMMEDIATE')
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA busy_timeout=30000")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("PRAGMA cache_size=10000")
+                    conn.execute("PRAGMA temp_store=MEMORY")
+                
+                conn.row_factory = sqlite3.Row
+                yield conn
+                
+                if not read_only:
+                    conn.commit()
+                break
+                
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and retry_count < max_retries - 1:
+                    retry_count += 1
+                    if conn:
+                        conn.close()
+                    time.sleep(0.5 * retry_count)  # Exponential backoff
+                    continue
+                else:
+                    raise
+            except Exception:
+                if conn and not read_only:
+                    conn.rollback()
+                raise
+            finally:
+                if conn:
+                    conn.close()
 
     def init_database(self):
         try:
             with self.get_db_connection() as conn:
                 conn.executescript('''
                     CREATE TABLE IF NOT EXISTS processed_videos (
-                        video_id TEXT PRIMARY KEY, title TEXT, url TEXT, published_at TEXT,
-                        processed_at TEXT, duration TEXT, status TEXT DEFAULT 'pending', 
-                        error_message TEXT, processing_attempts INTEGER DEFAULT 0, 
-                        cb_number INTEGER, cb_district TEXT
+                        video_id TEXT PRIMARY KEY, 
+                        title TEXT, 
+                        url TEXT, 
+                        published_at TEXT,
+                        processed_at TEXT, 
+                        duration TEXT, 
+                        status TEXT DEFAULT 'pending', 
+                        error_message TEXT, 
+                        processing_attempts INTEGER DEFAULT 0, 
+                        cb_number INTEGER, 
+                        cb_district TEXT,
+                        channel_source TEXT
                     );
                     CREATE TABLE IF NOT EXISTS meeting_analysis (
                         video_id TEXT PRIMARY KEY, 
@@ -90,14 +127,23 @@ class CBProcessor:
                         FOREIGN KEY (video_id) REFERENCES processed_videos (video_id)
                     );
                     CREATE TABLE IF NOT EXISTS transcripts (
-                        video_id TEXT PRIMARY KEY, transcript_text TEXT,
+                        video_id TEXT PRIMARY KEY, 
+                        transcript_text TEXT,
                         FOREIGN KEY (video_id) REFERENCES processed_videos (video_id)
                     );
                 ''')
+                
+                # Add any missing columns
                 try:
                     conn.execute("ALTER TABLE meeting_analysis ADD COLUMN meeting_date TEXT;")
                 except sqlite3.OperationalError:
                     pass
+                    
+                try:
+                    conn.execute("ALTER TABLE processed_videos ADD COLUMN channel_source TEXT;")
+                except sqlite3.OperationalError:
+                    pass
+                    
             logger.info("Database initialized successfully.")
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
@@ -106,8 +152,9 @@ class CBProcessor:
     def load_models(self):
         global whisper_model
         try:
-            whisper_model = whisper.load_model("medium")
-            logger.info("Whisper model loaded successfully")
+            from config import WHISPER_MODEL
+            whisper_model = whisper.load_model(WHISPER_MODEL)
+            logger.info(f"Whisper model '{WHISPER_MODEL}' loaded successfully")
         except Exception as e:
             logger.error(f"Model loading failed: {e}")
             raise
@@ -133,12 +180,46 @@ class CBProcessor:
             subprocess.run(cmd, check=True, capture_output=True)
             return str(output_file)
         else: # Is URL
-            ydl_opts = {'format': 'bestaudio/best', 'outtmpl': f'{temp_dir}/audio.%(ext)s', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}], 'quiet': True}
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([self.clean_youtube_url(source_path)])
-                for file in Path(temp_dir).glob("audio.*"):
-                    return str(file)
-            raise Exception("Audio extraction failed")
+            # --- CHANGE START ---
+            output_template = Path(temp_dir) / 'audio.%(ext)s'
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': str(output_template),
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192'
+                }],
+                'quiet': True,
+                'no_warnings': True
+            }
+            
+            downloaded_file_path = None
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([self.clean_youtube_url(source_path)])
+                
+                mp3_file = Path(temp_dir) / 'audio.mp3'
+                if mp3_file.exists() and mp3_file.stat().st_size > 0:
+                    return str(mp3_file)
+                else:
+                    # If not found, try looking for any audio file
+                    for file in Path(temp_dir).glob("audio.*"):
+                        if file.exists() and file.stat().st_size > 0:
+                            return str(file)
+                    raise Exception("Audio extraction failed: No valid audio file was produced")
+            
+            except Exception as e:
+                # Catch errors from yt-dlp itself
+                logger.error(f"yt-dlp download failed: {e}")
+                raise Exception(f"yt-dlp download failed: {e}")
+
+            # Explicitly check if a valid file was produced.
+            if downloaded_file_path:
+                return downloaded_file_path
+            else:
+                # If no file was found or it's empty, raise a clear error.
+                raise Exception("Audio extraction failed: No valid audio file was produced from the URL.")
 
     def transcribe_audio(self, audio_path: str) -> str:
         if not whisper_model: raise Exception("Whisper model not loaded")
@@ -216,30 +297,79 @@ class CBProcessor:
         logger.info(f"Analysis and transcript saved for {video_id}")
 
 processor = CBProcessor()
-cb_fetcher = CBChannelFetcher()
+cb_fetcher = CBChannelFetcher(str(processor.db_path))
 
 def core_video_processing_logic(video_id: str, title: str, url: str):
     start_time = time.time()
+    current_stage = "starting"
+    
     try:
+        # Update status with more granular information
         with processor.get_db_connection() as conn:
-            conn.execute("UPDATE processed_videos SET status = 'processing', processing_attempts = processing_attempts + 1, processed_at = ? WHERE video_id = ?", (datetime.now().isoformat(), video_id))
+            conn.execute("""
+                UPDATE processed_videos 
+                SET status = 'processing', 
+                    processing_attempts = processing_attempts + 1, 
+                    processed_at = ?,
+                    error_message = 'Stage: starting'
+                WHERE video_id = ?
+            """, (datetime.now().isoformat(), video_id))
+        
+        # Stage 1: Audio extraction
+        current_stage = "audio_extraction"
+        logger.info(f"Stage: {current_stage} for {video_id}")
         
         with tempfile.TemporaryDirectory() as temp_dir:
-            audio_path = processor.extract_audio(url, temp_dir, is_file=False)
-            transcript = processor.transcribe_audio(audio_path)
+            try:
+                audio_path = processor.extract_audio(url, temp_dir, is_file=False)
+            except Exception as e:
+                raise Exception(f"Audio extraction failed: {str(e)}")
+            
+            # Stage 2: Transcription
+            current_stage = "transcription"
+            logger.info(f"Stage: {current_stage} for {video_id}")
+            
+            try:
+                transcript = processor.transcribe_audio(audio_path)
+                if not transcript or len(transcript.strip()) < 100:
+                    raise Exception("Transcription produced insufficient content")
+            except Exception as e:
+                raise Exception(f"Transcription failed: {str(e)}")
+        
+        # Stage 3: Analysis
+        current_stage = "analysis"
+        logger.info(f"Stage: {current_stage} for {video_id}")
         
         meeting_date = processor.extract_meeting_date(title, transcript)
         analysis, summary_obj = processor.summarize_and_analyze(transcript, title, meeting_date)
         
+        # Stage 4: Saving results
+        current_stage = "saving_results"
         processor.save_results(video_id, analysis, transcript, time.time() - start_time, meeting_date)
         
+        # Final status update
         with processor.get_db_connection() as conn:
-            conn.execute("UPDATE processed_videos SET status = 'completed' WHERE video_id = ?", (video_id,))
-        logger.info(f"BACKGROUND: Processing for {video_id} completed.")
+            conn.execute("""
+                UPDATE processed_videos 
+                SET status = 'completed', 
+                    error_message = NULL 
+                WHERE video_id = ?
+            """, (video_id,))
+        
+        logger.info(f"BACKGROUND: Processing for {video_id} completed successfully in {time.time() - start_time:.2f}s")
+        
     except Exception as e:
-        logger.error(f"BACKGROUND: Processing failed for {video_id}: {e}\n{traceback.format_exc()}")
+        error_msg = f"Failed at stage '{current_stage}': {str(e)}"
+        logger.error(f"BACKGROUND: Processing failed for {video_id} - {error_msg}")
+        logger.error(traceback.format_exc())
+        
         with processor.get_db_connection() as conn:
-            conn.execute("UPDATE processed_videos SET status = 'failed', error_message = ? WHERE video_id = ?", (str(e)[:500], video_id))
+            conn.execute("""
+                UPDATE processed_videos 
+                SET status = 'failed', 
+                    error_message = ? 
+                WHERE video_id = ?
+            """, (error_msg[:500], video_id))
 
 @app.get("/health")
 async def health_check():

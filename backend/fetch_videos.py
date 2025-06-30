@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 import re
 import traceback
 import contextlib
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,8 @@ class CBChannelFetcher:
             'name': 'Manhattan CB7', 'url': 'https://www.youtube.com/@manhattancbseven4610',
             'channel_id': '@manhattancbseven4610', 'district': 'Manhattan', 'number': 7
         },
-        **{f'cb{i}': {'name': f'Manhattan CB{i}', 'url': '', 'channel_id': '', 'district': 'Manhattan', 'number': i} for i in list(range(1, 7)) + list(range(8, 13))}
+        **{f'cb{i}': {'name': f'Manhattan CB{i}', 'url': '', 'channel_id': '', 'district': 'Manhattan', 'number': i} 
+           for i in list(range(1, 7)) + list(range(8, 13))}
     }
     
     def __init__(self, db_path: str = "cb_meetings.db"):
@@ -29,21 +31,47 @@ class CBChannelFetcher:
     def get_db_connection(self, read_only=False):
         """Provides a database connection as a context manager."""
         conn = None
-        try:
-            db_uri = f"file:{self.db_path}?mode=ro" if read_only else str(self.db_path)
-            conn = sqlite3.connect(db_uri, uri=True, timeout=15.0, check_same_thread=False)
-            if not read_only:
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA busy_timeout=10000")
-            conn.row_factory = sqlite3.Row
-            yield conn
-            if not read_only: conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"Database error in CBChannelFetcher: {e}")
-            if conn and not read_only: conn.rollback()
-            raise
-        finally:
-            if conn: conn.close()
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count < max_retries:
+            try:
+                if read_only:
+                    db_uri = f"file:{self.db_path}?mode=ro&immutable=1"
+                    conn = sqlite3.connect(db_uri, uri=True, timeout=30.0)
+                else:
+                    conn = sqlite3.connect(str(self.db_path), timeout=30.0, isolation_level='IMMEDIATE')
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA busy_timeout=30000")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("PRAGMA cache_size=10000")
+                    conn.execute("PRAGMA temp_store=MEMORY")
+                
+                conn.row_factory = sqlite3.Row
+                yield conn
+                
+                if not read_only:
+                    conn.commit()
+                break
+                
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and retry_count < max_retries - 1:
+                    retry_count += 1
+                    if conn:
+                        conn.close()
+                    time.sleep(0.5 * retry_count)
+                    continue
+                else:
+                    logger.error(f"Database error in CBChannelFetcher: {e}")
+                    raise
+            except Exception as e:
+                logger.error(f"Database error in CBChannelFetcher: {e}")
+                if conn and not read_only:
+                    conn.rollback()
+                raise
+            finally:
+                if conn:
+                    conn.close()
 
     def fetch_channel_videos(self, cb_key: str, max_results: int = 50) -> List[Dict]:
         """Fetch recent videos from a CB channel"""
@@ -100,17 +128,22 @@ class CBChannelFetcher:
             return False
     
     def get_pending_videos(self, cb_number: Optional[int] = None, limit: int = 10) -> List[Dict]:
-        """Get videos that need processing, including ones that may be stuck."""
         try:
             with self.get_db_connection(read_only=True) as conn:
-                two_hours_ago = (datetime.now() - timedelta(hours=2)).isoformat()
+                # Consider videos stuck if processing for more than 30 minutes
+                thirty_minutes_ago = (datetime.now() - timedelta(minutes=30)).isoformat()
                 
                 query = """
                     SELECT * FROM processed_videos 
-                    WHERE (status = 'pending' OR (status = 'processing' AND processed_at < ?))
+                    WHERE (
+                        status = 'pending' 
+                        OR status = 'queued'
+                        OR (status = 'processing' AND processed_at < ?)
+                        OR (status = 'failed' AND processing_attempts < 3)
+                    )
                     AND processing_attempts < 3
                 """
-                params = [two_hours_ago]
+                params = [thirty_minutes_ago]
                 
                 if cb_number:
                     query += ' AND cb_number = ?'
@@ -120,9 +153,19 @@ class CBChannelFetcher:
                 params.append(limit)
                 
                 rows = conn.execute(query, params).fetchall()
-                if rows:
-                    logger.info(f"Found {len(rows)} pending or stuck videos to process.")
-                return [dict(row) for row in rows]
+                
+                videos = []
+                for row in rows:
+                    video_dict = dict(row)
+                    # Add a flag to indicate if this is a retry
+                    if video_dict['status'] == 'processing':
+                        video_dict['is_stuck'] = True
+                    videos.append(video_dict)
+                    
+                if videos:
+                    logger.info(f"Found {len(videos)} pending/stuck videos to process")
+                    
+                return videos
         except Exception as e:
             logger.error(f"Failed to get pending videos: {e}")
             return []
