@@ -353,7 +353,8 @@ const MeetingList: React.FC<MeetingListProps> = ({ cbNumber, onSelectMeeting }) 
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem'
+              gap: '0.5rem',
+              marginBottom: '10px'
             }}
           >
             <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />

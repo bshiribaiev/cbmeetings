@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Brain, CheckCircle, Loader, ArrowLeft, Youtube } from 'lucide-react';
+import { Brain, Loader, ArrowLeft, Youtube } from 'lucide-react';
 import './App.css';
 import MarkdownRenderer from './components/MarkdownRenderer';
 import Navbar from './components/Navbar';
