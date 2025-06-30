@@ -1,3 +1,4 @@
+whisper
 torch    
 pandas
 numpy<2.0                # pandas dep
