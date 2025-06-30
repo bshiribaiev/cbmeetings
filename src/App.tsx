@@ -175,7 +175,7 @@ const App = () => {
                     <h1 style={{fontSize: '2rem', fontWeight: '700'}}>{analysis.title}</h1>
                     
                     {analysis.url && (
-                        <a href={analysis.url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary" style={{marginBottom: '1.5rem'}}>
+                        <a href={analysis.url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary" style={{marginBottom: '1.5rem', background: 'white'}}>
                             <Youtube size={16} />
                             Watch on YouTube
                         </a>

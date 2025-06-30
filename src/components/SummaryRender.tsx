@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   FileText,
   Calendar,
@@ -6,7 +5,6 @@ import {
   TrendingUp,
   CheckSquare,
   MessageSquare,
-  List,
   AlertTriangle,
   ClipboardList,
   Tag

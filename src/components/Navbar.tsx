@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Building, ChevronDown, Video, List } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { ChevronDown, Video, List } from 'lucide-react';
 
 const Navbar = ({ onBoardSelect, currentView }: { onBoardSelect: (cb: number | null) => void, currentView: string }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
