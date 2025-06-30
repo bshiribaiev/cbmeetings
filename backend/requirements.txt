@@ -1,6 +1,6 @@
 pydub==0.25.1
-torch==2.2.2     
-pandas==2.2.2
+torch    
+pandas
 numpy<2.0                # pandas dep
 faster-whisper==1.1.1
 npydub==0.25.1
