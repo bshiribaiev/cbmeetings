@@ -33,7 +33,9 @@ from render_md import md_from_summary
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class ProcessRequest(BaseModel): url: str
+class ProcessRequest(BaseModel): 
+    url: str
+    cb_number: Optional[int] = None
 
 app = FastAPI(title="CB Meeting Processor", version="1.5.5") # Version bump
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -255,15 +257,24 @@ async def process_youtube_video_async(request: ProcessRequest, background_tasks:
     try:
         video_info = processor.extract_video_info(request.url)
         video_id, title = video_info['video_id'], video_info['title']
+
+        response_message = "Video queued for processing. Check the meeting list for updates."
+
         with processor.get_db_connection() as conn:
             existing = conn.execute("SELECT status FROM processed_videos WHERE video_id = ?", (video_id,)).fetchone()
+            
             if existing and existing['status'] == 'completed':
-                return JSONResponse(status_code=409, content={"message": "This video has already been successfully processed."})
-            cb_number = cb_fetcher.infer_cb_from_title(title)
+                response_message = "This video has been processed before. It is being queued again for re-processing."
+
+            cb_number = request.cb_number if request.cb_number is not None else cb_fetcher.infer_cb_from_title(title)
+            
             conn.execute('INSERT OR REPLACE INTO processed_videos (video_id, title, url, published_at, status, cb_number) VALUES (?, ?, ?, ?, ?, ?)',
                          (video_id, title, request.url, video_info.get('upload_date'), 'queued', cb_number))
+        
         background_tasks.add_task(core_video_processing_logic, video_id, title, request.url)
-        return {"success": True, "message": "Video queued for processing", "video_id": video_id}
+        
+        return {"success": True, "message": response_message, "video_id": video_id}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

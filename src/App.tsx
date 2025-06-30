@@ -38,6 +38,7 @@ const App = () => {
   const [currentView, setCurrentView] = useState<'analyzer' | 'meetings'>('analyzer');
   const [selectedCB, setSelectedCB] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [manualCB, setManualCB] = useState<number | string>('');
 
   useEffect(() => {
     const checkBackend = async () => {
@@ -80,7 +81,7 @@ const App = () => {
         response = await fetch('http://localhost:8000/process-youtube-async', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: youtubeUrl }),
+          body: JSON.stringify({ url: youtubeUrl, cb_number: Number(manualCB) }),
         });
       } else if (processingMode === 'file' && file) {
         const formData = new FormData();
@@ -127,6 +128,7 @@ const App = () => {
     setYoutubeUrl('');
     setAnalysis(null);
     setIsProcessing(false);
+    setManualCB('');
   };
   
   const handleSelectMeeting = (meeting: any) => {
@@ -252,14 +254,28 @@ const App = () => {
                     <button onClick={() => setProcessingMode('file')} className={`mode-button ${processingMode === 'file' ? 'active' : ''}`}>Upload File</button>
                 </div>
                 {processingMode === 'youtube' ? (
+                <div style={{display: 'flex', flexDirection: 'column', gap: '1rem'}}>
                     <input type="url" placeholder="https://www.youtube.com/watch?v=..." value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} className="input" />
+                    <select
+                        value={manualCB}
+                        onChange={(e) => setManualCB(e.target.value)}
+                        className="input d"
+                    >
+                        <option value="" disabled>Select a Community Board</option>
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map(cbNum => (
+                            <option key={cbNum} value={cbNum}>
+                                Manhattan CB {cbNum}
+                            </option>
+                        ))}
+                    </select>
+                </div>
                 ) : (
                     <div className={`upload-area ${dragActive ? 'active' : ''}`} onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={handleDrop} onClick={() => fileInputRef.current?.click()}>
                         <input ref={fileInputRef} type="file" accept="video/*,audio/*" onChange={handleFileSelect} style={{display: 'none'}} />
                         {file ? <div>{file.name}</div> : <div>Drop file or click to browse</div>}
                     </div>
                 )}
-                <button onClick={processVideo} disabled={(!file && !youtubeUrl) || isProcessing} className="btn btn-success" style={{width: '100%', marginTop: '1rem'}}>
+                <button onClick={processVideo} disabled={(!file && (!youtubeUrl || !manualCB)) || isProcessing} className="btn btn-success" style={{width: '100%', marginTop: '1rem'}}>
                     {isProcessing ? <><Loader size={20} className="animate-spin" /> Processing...</> : <><Brain size={20} /> Start Analysis</>}
                 </button>
             </div>
