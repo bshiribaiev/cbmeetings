@@ -183,17 +183,9 @@ const App = () => {
                         </a>
                     )}
 
-                    {analysis.summary_data ? (
-                        <SummaryRender 
-                            summaryData={analysis.summary_data}
-                            title={analysis.title}
-                            cbNumber={analysis.cb_number}
-                        />
-                    ) : (
-                        <MarkdownRenderer 
-                            markdown={analysis.summary_markdown || "No summary available."} 
-                        />
-                    )}
+                    <MarkdownRenderer 
+                      markdown={analysis.summary_markdown || "Error"}/> 
+                    
                     
                     <div style={{ marginTop: '2rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                         <button onClick={() => {
