@@ -4,7 +4,7 @@ import './App.css';
 import MarkdownRenderer from './components/MarkdownRenderer';
 import Navbar from './components/Navbar';
 import MeetingList from './components/MeetingList';
-import SummaryRender from './components/SummaryRender';
+//import SummaryRender from './components/SummaryRender';
 
 interface MeetingAnalysis {
   title: string;
