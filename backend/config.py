@@ -10,3 +10,4 @@ WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")
 WHISPER_MODEL  = "medium.en"         
 WHISPER_PREC   = "int8"      # 2 GB RAM, 4× faster than fp32
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+USE_OPENAI_WHISPER = True

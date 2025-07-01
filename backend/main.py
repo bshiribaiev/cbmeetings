@@ -154,19 +154,16 @@ class CBProcessor:
     def load_models(self):
         global whisper_model
         try:
-            from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
             if USE_OPENAI_WHISPER:
                 if not OPENAI_API_KEY:
                     raise Exception("OPENAI_API_KEY environment variable not set")
-                whisper_model = "openai_api"  # Just a flag
+                whisper_model = "openai_api"  
                 logger.info("Using OpenAI Whisper API")
-            else:
-                # Keep your existing local whisper code as fallback
-                whisper_model = whisper.load_model(WHISPER_MODEL)
-                logger.info(f"Whisper model '{WHISPER_MODEL}' loaded successfully")
+
         except Exception as e:
             logger.error(f"Model loading failed: {e}")
             raise
+        
     def check_ffmpeg(self) -> bool: return shutil.which("ffmpeg") is not None
 
     def clean_youtube_url(self, url: str) -> str:
