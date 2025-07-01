@@ -43,8 +43,9 @@ app = FastAPI(title="CB Meeting Processor", version="1.5.5") # Version bump
 app.add_middleware(
     CORSMiddleware, 
     allow_origins=[
-        "https://cbmeetings-git-master-bshiribaievs-projects.vercel.app/",
-        "http://localhost:3000" 
+        "https://cbmeetings-git-master-bshiribaievs-projects.vercel.app",
+        "https://cbmeetings.onrender.com",
+        "http://localhost:3000"
         ], 
     allow_credentials=True, 
     allow_methods=["*"], allow_headers=["*"])
