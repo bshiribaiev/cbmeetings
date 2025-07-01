@@ -1,4 +1,4 @@
-openai-whisper
+openai
 torch    
 pandas
 numpy<2.0                # pandas dep

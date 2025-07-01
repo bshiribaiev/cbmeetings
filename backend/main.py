@@ -12,7 +12,6 @@ import contextlib
 import os
 
 # AI and processing imports
-import whisper
 import yt_dlp
 
 # FastAPI and server imports
@@ -26,6 +25,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict
 from config import WHISPER_MODEL
+from openai import OpenAI
+from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
 
 # Import the summarization modules
 from summarize import summarize_transcript, MeetingSummary
@@ -153,12 +154,19 @@ class CBProcessor:
     def load_models(self):
         global whisper_model
         try:
-            whisper_model = whisper.load_model(WHISPER_MODEL)
-            logger.info(f"Whisper model '{WHISPER_MODEL}' loaded successfully")
+            from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
+            if USE_OPENAI_WHISPER:
+                if not OPENAI_API_KEY:
+                    raise Exception("OPENAI_API_KEY environment variable not set")
+                whisper_model = "openai_api"  # Just a flag
+                logger.info("Using OpenAI Whisper API")
+            else:
+                # Keep your existing local whisper code as fallback
+                whisper_model = whisper.load_model(WHISPER_MODEL)
+                logger.info(f"Whisper model '{WHISPER_MODEL}' loaded successfully")
         except Exception as e:
             logger.error(f"Model loading failed: {e}")
             raise
-
     def check_ffmpeg(self) -> bool: return shutil.which("ffmpeg") is not None
 
     def clean_youtube_url(self, url: str) -> str:
@@ -221,12 +229,22 @@ class CBProcessor:
                 # If no file was found or it's empty, raise a clear error.
                 raise Exception("Audio extraction failed: No valid audio file was produced from the URL.")
 
-    def transcribe_audio(self, audio_path: str) -> str:
-        if not whisper_model: raise Exception("Whisper model not loaded")
-        result = whisper_model.transcribe(audio_path, language="en", fp16=False)
-        return result["text"].strip()
+    def transcribe_audio(self, audio_path: str) -> str:    
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            
+            with open(audio_path, "rb") as audio_file:
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="en"
+                )
+            
+            return transcript.text.strip()
+            
+        except Exception as e:
+            raise Exception(f"OpenAI Whisper API failed: {str(e)}")
 
-    # *** THIS IS THE FIX ***
     def extract_meeting_date(self, title: str, transcript: str) -> str:
         """
         More robustly extracts a meeting date by checking title, then the start of the transcript,
@@ -374,13 +392,34 @@ def core_video_processing_logic(video_id: str, title: str, url: str):
 @app.get("/health")
 async def health_check():
     db_ok = False
+    whisper_ok = False
+    
     try:
-        with processor.get_db_connection(read_only=True) as conn: conn.execute("SELECT 1")
+        with processor.get_db_connection(read_only=True) as conn: 
+            conn.execute("SELECT 1")
         db_ok = True
     except Exception as e:
         logger.error(f"Health check DB error: {e}")
-    class HealthStatus(BaseModel): whisper: bool; ffmpeg: bool; database: bool
-    return HealthStatus(whisper=whisper_model is not None, ffmpeg=processor.check_ffmpeg(), database=db_ok)
+    
+    try:
+        from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
+        if USE_OPENAI_WHISPER:
+            whisper_ok = bool(OPENAI_API_KEY)
+        else:
+            whisper_ok = whisper_model is not None
+    except Exception:
+        whisper_ok = False
+    
+    class HealthStatus(BaseModel): 
+        whisper: bool
+        ffmpeg: bool
+        database: bool
+        
+    return HealthStatus(
+        whisper=whisper_ok, 
+        ffmpeg=processor.check_ffmpeg(), 
+        database=db_ok
+    )
 
 @app.post("/process-youtube-async")
 async def process_youtube_video_async(request: ProcessRequest, background_tasks: BackgroundTasks):
