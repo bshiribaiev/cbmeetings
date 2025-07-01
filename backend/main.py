@@ -18,14 +18,14 @@ import yt_dlp
 # FastAPI and server imports
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from analyzer import CBAnalyzer
 from fetch_videos import CBChannelFetcher
 from typing import Optional
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict
+from config import WHISPER_MODEL
 
 # Import the summarization modules
 from summarize import summarize_transcript, MeetingSummary
@@ -153,7 +153,6 @@ class CBProcessor:
     def load_models(self):
         global whisper_model
         try:
-            from config import WHISPER_MODEL
             whisper_model = whisper.load_model(WHISPER_MODEL)
             logger.info(f"Whisper model '{WHISPER_MODEL}' loaded successfully")
         except Exception as e:
