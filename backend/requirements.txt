@@ -1,7 +1,7 @@
 openai
 torch    
 pandas
-numpy<2.0                # pandas dep
+numpy<2.0                
 fastapi
 uvicorn[standard]==0.24.0
 yt_dlp

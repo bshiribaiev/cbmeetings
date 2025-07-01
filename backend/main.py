@@ -40,7 +40,14 @@ class ProcessRequest(BaseModel):
     cb_number: Optional[int] = None
 
 app = FastAPI(title="CB Meeting Processor", version="1.5.5") # Version bump
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=[
+        "https://cbmeetings-git-master-bshiribaievs-projects.vercel.app/",
+        "http://localhost:3000" 
+        ], 
+    allow_credentials=True, 
+    allow_methods=["*"], allow_headers=["*"])
 
 whisper_model = None
 db_path = Path("cb_meetings.db")

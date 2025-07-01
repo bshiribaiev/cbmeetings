@@ -43,7 +43,7 @@ const App = () => {
   useEffect(() => {
     const checkBackend = async () => {
       try {
-        const response = await fetch('http://localhost:8000/health');
+        const response = await fetch('https://cbmeetings.onrender.com/health');
         if (response.ok) setBackendStatus('online');
         else setBackendStatus('offline');
       } catch (error) {
@@ -78,7 +78,7 @@ const App = () => {
       let response;
       
       if (processingMode === 'youtube' && youtubeUrl) {
-        response = await fetch('http://localhost:8000/process-youtube-async', {
+        response = await fetch('https://cbmeetings.onrender.com/process-youtube-async', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: youtubeUrl, cb_number: Number(manualCB) }),
@@ -86,7 +86,7 @@ const App = () => {
       } else if (processingMode === 'file' && file) {
         const formData = new FormData();
         formData.append('file', file);
-        response = await fetch('http://localhost:8000/process-file', {
+        response = await fetch('https://cbmeetings.onrender.com/process-file', {
           method: 'POST',
           body: formData,
         });

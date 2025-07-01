@@ -89,7 +89,7 @@ const MeetingList: React.FC<MeetingListProps> = ({ cbNumber, onSelectMeeting }) 
     const fetchStart = Date.now();
     
     try {
-      const url = `http://localhost:8000/api/cb/${cbNumber}/meetings`;
+      const url = `https://cbmeetings.onrender.com/api/cb/${cbNumber}/meetings`;
       console.log(`[fetchMeetings] Fetching from: ${url}`);
       
       const response = await fetch(url);
@@ -155,7 +155,7 @@ const MeetingList: React.FC<MeetingListProps> = ({ cbNumber, onSelectMeeting }) 
     setRefreshing(true);
     try {
       // Fetch new videos from YouTube
-      const response = await fetch(`http://localhost:8000/api/cb/cb${cbNumber}/fetch-videos`, {
+      const response = await fetch(`https://cbmeetings.onrender.com/api/cb/cb${cbNumber}/fetch-videos`, {
         method: 'POST'
       });
       
