@@ -472,13 +472,6 @@ async def process_single_pending_video(video_id: str, background_tasks: Backgrou
 
 # Deployment
 if __name__ == "__main__":
+    import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-    import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        reload_excludes=["*.log", "*.db*"]
-    )

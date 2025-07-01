@@ -1,15 +1,11 @@
-whisper
+openai-whisper
 torch    
 pandas
 numpy<2.0                # pandas dep
-
 fastapi
 uvicorn[standard]==0.24.0
-pydantic
 yt_dlp
 python-dotenv
 python-multipart==0.0.9
-
 google-generativeai==0.5.2
-python-multipart==0.0.9
 pydantic>=2
