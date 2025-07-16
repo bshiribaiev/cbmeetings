@@ -179,22 +179,43 @@ class CBProcessor:
         return f"https://www.youtube.com/watch?v={match.group(1)}" if match else url
 
     def extract_video_info(self, url: str) -> Dict:
+        cookie_string = """# Netscape HTTP Cookie File
+# http://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file!  Do not edit.
+
+.youtube.com	TRUE	/	TRUE	1787262416	PREF	tz=America.New_York&f7=100&f4=4000000
+.youtube.com	TRUE	/	TRUE	1752704200	GPS	1
+.youtube.com	TRUE	/	TRUE	1784238412	__Secure-1PSIDTS	sidts-CjIB5H03P7Y_uIIgcBI_9HwtsA_G0wPtEfIPl4DI0u_AGAv-OEKbs6TD86PhyiA-vjB02hAA
+.youtube.com	TRUE	/	TRUE	1784238412	__Secure-3PSIDTS	sidts-CjIB5H03P7Y_uIIgcBI_9HwtsA_G0wPtEfIPl4DI0u_AGAv-OEKbs6TD86PhyiA-vjB02hAA
+.youtube.com	TRUE	/	FALSE	1787262412	HSID	AFtdzMQ7BqG6LAPw-
+.youtube.com	TRUE	/	TRUE	1787262412	SSID	AhZW_DXAE-mamAyo8
+.youtube.com	TRUE	/	FALSE	1787262412	APISID	Hn473zJYsyLOG_qM/ANQLc-PYxa34YTfDT
+.youtube.com	TRUE	/	TRUE	1787262412	SAPISID	4MaKD5ZPVkEgEK-m/AfMwqmLp7klvK5jbJ
+.youtube.com	TRUE	/	TRUE	1787262412	__Secure-1PAPISID	4MaKD5ZPVkEgEK-m/AfMwqmLp7klvK5jbJ
+.youtube.com	TRUE	/	TRUE	1787262412	__Secure-3PAPISID	4MaKD5ZPVkEgEK-m/AfMwqmLp7klvK5jbJ
+.youtube.com	TRUE	/	FALSE	1787262412	SID	g.a000zAhDCtXjwd_ihBNV2Y3JXA37Kn-JpWMnRI5jxDhKo1kF2hLHn3rUtcgn1e7KX8NyUJ30ywACgYKAT8SARMSFQHGX2Mi9Zc8283-hrNlOeYdP8jPVBoVAUF8yKrv1oD-G9uEut1cv3Ssrjyf0076
+.youtube.com	TRUE	/	TRUE	1787262412	__Secure-1PSID	g.a000zAhDCtXjwd_ihBNV2Y3JXA37Kn-JpWMnRI5jxDhKo1kF2hLHF5FxT3CjHQFE5_NltOu68QACgYKAX8SARMSFQHGX2MiqV4H117V1NCuQyBHFrM4ChoVAUF8yKq4NXG9Ibm8WGvtjODz5O1U0076
+.youtube.com	TRUE	/	TRUE	1787262412	__Secure-3PSID	g.a000zAhDCtXjwd_ihBNV2Y3JXA37Kn-JpWMnRI5jxDhKo1kF2hLH3sbCPwwIKUw2aH-Zf6W2BgACgYKAWISARMSFQHGX2Mirl9FceaIxjmJ64K8Xl4CABoVAUF8yKqZ2vFDD4LNzELYArwDREd10076
+.youtube.com	TRUE	/	TRUE	1787262413	LOGIN_INFO	AFmmF2swRAIgYnhkmrfWR4YPby4VlWe-8BcPVx2jqnpE7vpZd6Axn34CIBp0XXEVQWwl-yxmR4SGY5Cc7Ld4OGIc2eacuSzE0XJJ:QUQ3MjNmeXJ4eld0TEJabHFqMXphX1ZPUVVXNlU4UXJ5U29KY3VHNDg3UXlOMUpNelFmcnhQYmJqU3laNmhlUmdKTnNaYUs1c0o0LTVXZGNIOWV2T1huSG5Bb1Zud09CT2ZRN1RBZm50dVRuZGo3MlBnVHRja1lSaHRzeWI0MnFEakYyUklWeDhYbXdkdkl1b3Nkb2E2bTJrclY4MG9kRFNR
+.youtube.com	TRUE	/	FALSE	1784238421	SIDCC	AKEyXzXvnheBQSiEk7H6Xi095Lx2uHUN5so57twbztvrmZS35pza9ccNwuoR-03O1S53VaKu
+.youtube.com	TRUE	/	TRUE	1784238421	__Secure-1PSIDCC	AKEyXzWJE0Lf2d-Qg-7CvXS-rhTMydpR6kMW89u5aPD694DyUvukeB1N2hQ3o2ADnljg8CxCbg
+.youtube.com	TRUE	/	TRUE	1784238421	__Secure-3PSIDCC	AKEyXzXFZ6iVtGoezZGshUeVJv7R7GzFx_l09v13MxNdBRMZljeojdKkzt6EXrABTPFRKPEY
+.youtube.com	TRUE	/	TRUE	0	YSC	1-KL9wQjL5o
+.youtube.com	TRUE	/	TRUE	1768254418	VISITOR_INFO1_LIVE	M3EZvNgpImI
+.youtube.com	TRUE	/	TRUE	1768254418	VISITOR_PRIVACY_METADATA	CgJVUxIEGgAgEw%3D%3D
+.youtube.com	TRUE	/	TRUE	1768238525	__Secure-ROLLOUT_TOKEN	CKHc_c64hNTZWhDZ396i7pqOAxiCp_SN8sGOAw%3D%3D
+"""
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         }
         
-        cookies_data = os.getenv('YOUTUBE_COOKIES')
-        
-        # Use a temporary directory to handle the cookie file safely
         with tempfile.TemporaryDirectory() as temp_dir:
-            cookies_file_path = None
-            if cookies_data:
-                cookies_file_path = Path(temp_dir) / 'cookies.txt'
-                cookies_file_path.write_text(cookies_data)
-                ydl_opts['cookiefile'] = str(cookies_file_path)
-                logger.info("Found YouTube cookies, using them for video info extraction.")
+            cookies_file_path = Path(temp_dir) / 'cookies.txt'
+            # This now uses the hard-coded string from above
+            cookies_file_path.write_text(cookie_string.strip())
+            ydl_opts['cookiefile'] = str(cookies_file_path)
+            logger.info("Using HARD-CODED cookies for video info extraction test.")
             
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
