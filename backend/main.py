@@ -179,12 +179,32 @@ class CBProcessor:
         return f"https://www.youtube.com/watch?v={match.group(1)}" if match else url
 
     def extract_video_info(self, url: str) -> Dict:
-        try:
-            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
-                info = ydl.extract_info(self.clean_youtube_url(url), download=False)
-                return {'video_id': info.get('id'), 'title': info.get('title'), 'upload_date': info.get('upload_date')}
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to extract video info: {str(e)}")
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        }
+        
+        cookies_data = os.getenv('YOUTUBE_COOKIES')
+        
+        # Use a temporary directory to handle the cookie file safely
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cookies_file_path = None
+            if cookies_data:
+                cookies_file_path = Path(temp_dir) / 'cookies.txt'
+                cookies_file_path.write_text(cookies_data)
+                ydl_opts['cookiefile'] = str(cookies_file_path)
+                logger.info("Found YouTube cookies, using them for video info extraction.")
+            
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(self.clean_youtube_url(url), download=False)
+                    return {'video_id': info.get('id'), 'title': info.get('title'), 'upload_date': info.get('upload_date')}
+            except Exception as e:
+                # The error message from yt-dlp is often very informative
+                error_detail = str(e)
+                logger.error(f"Failed to extract video info: {error_detail}")
+                raise HTTPException(status_code=400, detail=f"Failed to extract video info: {error_detail}")
 
     def extract_audio(self, source_path: str, temp_dir: str, is_file: bool) -> str:
         if is_file:
