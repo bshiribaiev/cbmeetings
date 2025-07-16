@@ -29,3 +29,5 @@ backend/__pycache__
 backend/cb_processor.log
 backend/.env
 backend/list_models.py
+main2.py
+app2.tsx

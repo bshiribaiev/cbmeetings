@@ -89,6 +89,7 @@ const MeetingList: React.FC<MeetingListProps> = ({ cbNumber, onSelectMeeting }) 
     const fetchStart = Date.now();
     
     try {
+      //const url = `http://localhost:8000/api/cb/${cbNumber}/meetings`;
       const url = `https://cbmeetings.onrender.com/api/cb/${cbNumber}/meetings`;
       console.log(`[fetchMeetings] Fetching from: ${url}`);
       
