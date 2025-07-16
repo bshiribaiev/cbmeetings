@@ -44,7 +44,7 @@ app.add_middleware(
     CORSMiddleware, 
     allow_origins=[
         "https://cbmeetings-git-master-bshiribaievs-projects.vercel.app",
-        "https://cbmeetings.vercel.app/",
+        "https://cbmeetings.vercel.app",
         "https://cbmeetings.onrender.com",
         "http://localhost:3000",
         "http://localhost:5174"
