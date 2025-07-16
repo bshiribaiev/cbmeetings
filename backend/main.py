@@ -10,6 +10,7 @@ import re
 import asyncio
 import contextlib
 import os
+import uvicorn
 
 # AI and processing imports
 import yt_dlp
@@ -24,7 +25,6 @@ from typing import Optional
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
-from config import WHISPER_MODEL
 from openai import OpenAI
 from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
 
@@ -44,8 +44,10 @@ app.add_middleware(
     CORSMiddleware, 
     allow_origins=[
         "https://cbmeetings-git-master-bshiribaievs-projects.vercel.app",
+        "https://cbmeetings.vercel.app/",
         "https://cbmeetings.onrender.com",
-        "http://localhost:3000"
+        "http://localhost:3000",
+        "http://localhost:5174"
         ], 
     allow_credentials=True, 
     allow_methods=["*"], allow_headers=["*"])
@@ -515,9 +517,14 @@ async def process_single_pending_video(video_id: str, background_tasks: Backgrou
 
 # local 
 # if __name__ == "__main__":
+#     uvicorn.run(
+#         app,
+#         host="0.0.0.0",
+#         port=8000,
+#         log_level="info",
+#         reload=False)
 
 # Deployment
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
