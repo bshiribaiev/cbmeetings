@@ -193,7 +193,6 @@ class CBProcessor:
             subprocess.run(cmd, check=True, capture_output=True)
             return str(output_file)
         else: # Is URL
-            # --- CHANGE START ---
             output_template = Path(temp_dir) / 'audio.%(ext)s'
             ydl_opts = {
                 'format': 'bestaudio/best',
@@ -206,10 +205,19 @@ class CBProcessor:
                 'quiet': True,
                 'no_warnings': True,
                 'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'referer': 'https://www.youtube.com/',
+                'referer': 'http://googleusercontent.com/youtube/3',
             }
+
+            # Check for cookies in the environment variables
+            cookies_data = os.getenv('YOUTUBE_COOKIES')
+            cookies_file_path = None
+            if cookies_data:
+                # Write cookies to a temporary file for yt-dlp to use
+                cookies_file_path = Path(temp_dir) / 'cookies.txt'
+                cookies_file_path.write_text(cookies_data)
+                ydl_opts['cookiefile'] = str(cookies_file_path)
+                logger.info("Found YouTube cookies, using them for extraction.")
                     
-            downloaded_file_path = None
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([self.clean_youtube_url(source_path)])
@@ -225,17 +233,12 @@ class CBProcessor:
                     raise Exception("Audio extraction failed: No valid audio file was produced")
             
             except Exception as e:
-                # Catch errors from yt-dlp itself
                 logger.error(f"yt-dlp download failed: {e}")
                 raise Exception(f"yt-dlp download failed: {e}")
-
-            # Explicitly check if a valid file was produced.
-            if downloaded_file_path:
-                return downloaded_file_path
-            else:
-                # If no file was found or it's empty, raise a clear error.
-                raise Exception("Audio extraction failed: No valid audio file was produced from the URL.")
-
+            finally:
+                 # Clean up the temporary cookies file if it was created
+                if cookies_file_path and cookies_file_path.exists():
+                    os.remove(cookies_file_path)
     def transcribe_audio(self, audio_path: str) -> str:    
         try:
             client = OpenAI(api_key=OPENAI_API_KEY)
