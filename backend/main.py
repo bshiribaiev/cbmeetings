@@ -216,7 +216,7 @@ class CBProcessor:
         
         # Enhanced options to avoid detection
         ydl_opts = {
-            'format': 'bestaudio/best',
+            'format': 'm4a/bestaudio/best',
             'outtmpl': str(output_template),
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
