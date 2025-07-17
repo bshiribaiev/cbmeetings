@@ -12,6 +12,7 @@ import contextlib
 import os
 import uvicorn
 import yt_dlp
+import requests
 
 # FastAPI and server imports
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -180,9 +181,10 @@ class CBProcessor:
     
     def extract_video_info(self, url: str) -> Dict:
         ydl_opts = {
-            'listformats': True,
-            'quiet': False,
-            'no_warnings': False,
+            'quiet': True,
+            'no_warnings': True,
+            'format': 'best',
+            'ignoreerrors': True
         }
         
         cookies_data = os.getenv('YOUTUBE_COOKIES')
@@ -196,6 +198,8 @@ class CBProcessor:
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(self.clean_youtube_url(url), download=False)
+                    if not info:
+                        raise Exception("yt-dlp failed to extract info and returned None.")
                     return {'video_id': info.get('id'), 'title': info.get('title'), 'upload_date': info.get('upload_date')}
             except Exception as e:
                 error_detail = str(e)
@@ -209,68 +213,44 @@ class CBProcessor:
             subprocess.run(cmd, check=True, capture_output=True)
             return str(output_file)
         else:
-            cookies = os.getenv('YOUTUBE_COOKIES')
-            return self.extract_with_ytdlp(source_path, temp_dir, cookies=cookies)
-        
-    def extract_with_ytdlp(self, url: str, temp_dir: str, cookies: str = None) -> str:
-        output_template = Path(temp_dir) / 'audio.%(ext)s'
-        
-        # Enhanced options to avoid detection
-        ydl_opts = {
-            'format': 'bestaudio',
-            'listformats': True,
-            'outtmpl': str(output_template),
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192'
-            }],
-            'quiet': False,  # Set to False to see errors
-            'no_warnings': False,
-            # Add these options
-            'extract_flat': False,
-            'ignoreerrors': True,
-            'no_check_certificate': True,
-            'prefer_insecure': True,
-            # Headers to appear more like a browser
-            'headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            }
-        }
-        
-        cookies_file = None  
-        try:
-            if cookies:
-                cookies_file = Path(temp_dir) / 'cookies.txt'
-                cookies_file.write_text(cookies)
-                ydl_opts['cookiefile'] = str(cookies_file)
+            logger.info("Using Cobalt API to get direct audio URL...")
+            try:
+                # Ask Cobalt for a direct download link
+                cobalt_api_url = "https://co.wuk.sh/api/json"
+                payload = {
+                    "url": source_path,
+                    "aFormat": "mp3",
+                    "isAudioOnly": True
+                }
+                response = requests.post(cobalt_api_url, json=payload, timeout=30)
+                response.raise_for_status()  # Raise an exception for bad status codes
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+                data = response.json()
+                if data.get('status') != 'stream':
+                    raise Exception(f"Cobalt API returned an error: {data.get('text', 'Unknown error')}")
 
-            mp3_file = Path(temp_dir) / 'audio.mp3'
-            if mp3_file.exists() and mp3_file.stat().st_size > 0:
-                return str(mp3_file)
-            else:
-                for file in Path(temp_dir).glob("audio.*"):
-                    if file.exists() and file.stat().st_size > 0:
-                        return str(file)
-                raise Exception("Audio extraction failed: No valid audio file was produced")
+                audio_download_url = data.get('url')
+                if not audio_download_url:
+                    raise Exception("Cobalt API did not return a download URL.")
 
-        except Exception as e:
-            logger.error(f"yt-dlp download failed: {e}")
-            raise Exception(f"yt-dlp download failed: {e}")
-        finally:
-            if cookies_file and cookies_file.exists():
-                try:
-                    os.remove(cookies_file)
-                except:
-                    pass
+                # Download the audio file from the direct link
+                logger.info(f"Downloading audio from direct URL...")
+                output_path = Path(temp_dir) / 'audio.mp3'
+                
+                with requests.get(audio_download_url, stream=True, timeout=300) as r:
+                    r.raise_for_status()
+                    with open(output_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                
+                if not output_path.exists() or output_path.stat().st_size == 0:
+                    raise Exception("Downloaded audio file is empty.")
+
+                return str(output_path)
+
+            except Exception as e:
+                logger.error(f"Audio extraction via Cobalt failed: {e}")
+                raise Exception(f"Audio extraction via Cobalt failed: {e}")
                         
     def transcribe_audio(self, audio_path: str) -> str:    
         try:
