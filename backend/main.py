@@ -181,22 +181,28 @@ class CBProcessor:
         return f"https://www.youtube.com/watch?v={match.group(1)}" if match else url
     
     def extract_video_info(self, url: str) -> Dict:
-        # Get YouTube API Key from environment
         api_key = os.getenv('YOUTUBE_API_KEY')
         if not api_key:
             raise Exception("YOUTUBE_API_KEY environment variable not set.")
 
-        # Extract video ID from URL with regex
         video_id = None
-        regex = r"(?:v=|\/|youtu\.be\/|embed\/|watch\?v=)([^#\&\?]{11})"
-        match = re.search(regex, url)
-        if match:
-            video_id = match.group(1)
+        patterns = [
+            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+            r'(?:youtu\.be\/|embed\/|v\/|shorts\/)([0-9A-Za-z_-]{11})'
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                video_id = match.group(1)
+                break
         
+        # Add this logging line for debugging
+        logger.info(f"Extracted video ID: '{video_id}' from URL: '{url}'")
+
         if not video_id:
             raise HTTPException(status_code=400, detail="Could not parse YouTube video ID from URL.")
 
-        # Call the official YouTube Data API
+        # 3. Call the official YouTube Data API
         try:
             youtube = build('youtube', 'v3', developerKey=api_key)
             request = youtube.videos().list(
@@ -212,7 +218,7 @@ class CBProcessor:
             return {
                 'video_id': video_id,
                 'title': snippet.get('title'),
-                'upload_date': snippet.get('publishedAt') 
+                'upload_date': snippet.get('publishedAt')
             }
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"YouTube API request failed: {e}")
