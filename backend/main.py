@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Dict
 from openai import OpenAI
 from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
+from googleapiclient.discovery import build
 
 # Import the summarization modules
 from summarize import summarize_transcript, MeetingSummary
@@ -180,32 +181,41 @@ class CBProcessor:
         return f"https://www.youtube.com/watch?v={match.group(1)}" if match else url
     
     def extract_video_info(self, url: str) -> Dict:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'format': 'best',
-            'ignoreerrors': True
-        }
-        
-        cookies_data = os.getenv('YOUTUBE_COOKIES')
-        with tempfile.TemporaryDirectory() as temp_dir:
-            if cookies_data:
-                cookies_file_path = Path(temp_dir) / 'cookies.txt'
-                cookies_file_path.write_text(cookies_data)
-                ydl_opts['cookiefile'] = str(cookies_file_path)
-                logger.info("Using YouTube cookies for video info extraction.")
-            
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(self.clean_youtube_url(url), download=False)
-                    if not info:
-                        raise Exception("yt-dlp failed to extract info and returned None.")
-                    return {'video_id': info.get('id'), 'title': info.get('title'), 'upload_date': info.get('upload_date')}
-            except Exception as e:
-                error_detail = str(e)
-                logger.error(f"Failed to extract video info: {error_detail}")
-                raise HTTPException(status_code=400, detail=f"Failed to extract video info: {error_detail}")
+        # Get YouTube API Key from environment
+        api_key = os.getenv('YOUTUBE_API_KEY')
+        if not api_key:
+            raise Exception("YOUTUBE_API_KEY environment variable not set.")
 
+        # Extract video ID from URL with regex
+        video_id = None
+        regex = r"(?:v=|\/|youtu\.be\/|embed\/|watch\?v=)([^#\&\?]{11})"
+        match = re.search(regex, url)
+        if match:
+            video_id = match.group(1)
+        
+        if not video_id:
+            raise HTTPException(status_code=400, detail="Could not parse YouTube video ID from URL.")
+
+        # Call the official YouTube Data API
+        try:
+            youtube = build('youtube', 'v3', developerKey=api_key)
+            request = youtube.videos().list(
+                part="snippet",
+                id=video_id
+            )
+            response = request.execute()
+
+            if not response.get('items'):
+                raise Exception("Video not found or API error.")
+
+            snippet = response['items'][0]['snippet']
+            return {
+                'video_id': video_id,
+                'title': snippet.get('title'),
+                'upload_date': snippet.get('publishedAt') 
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"YouTube API request failed: {e}")
     def extract_audio(self, source_path: str, temp_dir: str, is_file: bool) -> str:
         if is_file:
             output_file = Path(temp_dir) / f"audio_{Path(source_path).stem}.mp3"
