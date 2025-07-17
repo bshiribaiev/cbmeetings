@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Dict
 from openai import OpenAI
 from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
-from browser_helper import BrowserHelper
 
 # Import the summarization modules
 from summarize import summarize_transcript, MeetingSummary
@@ -179,58 +178,25 @@ class CBProcessor:
         match = re.search(r'[?&]v=([^&]+)', url)
         return f"https://www.youtube.com/watch?v={match.group(1)}" if match else url
     
-    def get_fresh_cookies(self) -> str:
-        cookies = os.getenv('YOUTUBE_COOKIES')
-        if cookies:
-            return cookies
-        
-        return """# Netscape HTTP Cookie File
-# http://curl.haxx.se/rfc/cookie_spec.html
-# This is a generated file!  Do not edit.
-
-.youtube.com	TRUE	/	TRUE	1787262416	PREF	tz=America.New_York&f7=100&f4=4000000
-.youtube.com	TRUE	/	TRUE	1752704200	GPS	1
-.youtube.com	TRUE	/	TRUE	1784238412	__Secure-1PSIDTS	sidts-CjIB5H03P7Y_uIIgcBI_9HwtsA_G0wPtEfIPl4DI0u_AGAv-OEKbs6TD86PhyiA-vjB02hAA
-.youtube.com	TRUE	/	TRUE	1784238412	__Secure-3PSIDTS	sidts-CjIB5H03P7Y_uIIgcBI_9HwtsA_G0wPtEfIPl4DI0u_AGAv-OEKbs6TD86PhyiA-vjB02hAA
-.youtube.com	TRUE	/	FALSE	1787262412	HSID	AFtdzMQ7BqG6LAPw-
-.youtube.com	TRUE	/	TRUE	1787262412	SSID	AhZW_DXAE-mamAyo8
-.youtube.com	TRUE	/	FALSE	1787262412	APISID	Hn473zJYsyLOG_qM/ANQLc-PYxa34YTfDT
-.youtube.com	TRUE	/	TRUE	1787262412	SAPISID	4MaKD5ZPVkEgEK-m/AfMwqmLp7klvK5jbJ
-.youtube.com	TRUE	/	TRUE	1787262412	__Secure-1PAPISID	4MaKD5ZPVkEgEK-m/AfMwqmLp7klvK5jbJ
-.youtube.com	TRUE	/	TRUE	1787262412	__Secure-3PAPISID	4MaKD5ZPVkEgEK-m/AfMwqmLp7klvK5jbJ
-.youtube.com	TRUE	/	FALSE	1787262412	SID	g.a000zAhDCtXjwd_ihBNV2Y3JXA37Kn-JpWMnRI5jxDhKo1kF2hLHn3rUtcgn1e7KX8NyUJ30ywACgYKAT8SARMSFQHGX2Mi9Zc8283-hrNlOeYdP8jPVBoVAUF8yKrv1oD-G9uEut1cv3Ssrjyf0076
-.youtube.com	TRUE	/	TRUE	1787262412	__Secure-1PSID	g.a000zAhDCtXjwd_ihBNV2Y3JXA37Kn-JpWMnRI5jxDhKo1kF2hLHF5FxT3CjHQFE5_NltOu68QACgYKAX8SARMSFQHGX2MiqV4H117V1NCuQyBHFrM4ChoVAUF8yKq4NXG9Ibm8WGvtjODz5O1U0076
-.youtube.com	TRUE	/	TRUE	1787262412	__Secure-3PSID	g.a000zAhDCtXjwd_ihBNV2Y3JXA37Kn-JpWMnRI5jxDhKo1kF2hLH3sbCPwwIKUw2aH-Zf6W2BgACgYKAWISARMSFQHGX2Mirl9FceaIxjmJ64K8Xl4CABoVAUF8yKqZ2vFDD4LNzELYArwDREd10076
-.youtube.com	TRUE	/	TRUE	1787262413	LOGIN_INFO	AFmmF2swRAIgYnhkmrfWR4YPby4VlWe-8BcPVx2jqnpE7vpZd6Axn34CIBp0XXEVQWwl-yxmR4SGY5Cc7Ld4OGIc2eacuSzE0XJJ:QUQ3MjNmeXJ4eld0TEJabHFqMXphX1ZPUVVXNlU4UXJ5U29KY3VHNDg3UXlOMUpNelFmcnhQYmJqU3laNmhlUmdKTnNaYUs1c0o0LTVXZGNIOWV2T1huSG5Bb1Zud09CT2ZRN1RBZm50dVRuZGo3MlBnVHRja1lSaHRzeWI0MnFEakYyUklWeDhYbXdkdkl1b3Nkb2E2bTJrclY4MG9kRFNR
-.youtube.com	TRUE	/	FALSE	1784238421	SIDCC	AKEyXzXvnheBQSiEk7H6Xi095Lx2uHUN5so57twbztvrmZS35pza9ccNwuoR-03O1S53VaKu
-.youtube.com	TRUE	/	TRUE	1784238421	__Secure-1PSIDCC	AKEyXzWJE0Lf2d-Qg-7CvXS-rhTMydpR6kMW89u5aPD694DyUvukeB1N2hQ3o2ADnljg8CxCbg
-.youtube.com	TRUE	/	TRUE	1784238421	__Secure-3PSIDCC	AKEyXzXFZ6iVtGoezZGshUeVJv7R7GzFx_l09v13MxNdBRMZljeojdKkzt6EXrABTPFRKPEY
-.youtube.com	TRUE	/	TRUE	0	YSC	1-KL9wQjL5o
-.youtube.com	TRUE	/	TRUE	1768254418	VISITOR_INFO1_LIVE	M3EZvNgpImI
-.youtube.com	TRUE	/	TRUE	1768254418	VISITOR_PRIVACY_METADATA	CgJVUxIEGgAgEw%3D%3D
-.youtube.com	TRUE	/	TRUE	1768238525	__Secure-ROLLOUT_TOKEN	CKHc_c64hNTZWhDZ396i7pqOAxiCp_SN8sGOAw%3D%3D
-"""
-                
     def extract_video_info(self, url: str) -> Dict:
-        cookie_string = self.get_fresh_cookies()
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
         }
         
+        cookies_data = os.getenv('YOUTUBE_COOKIES')
         with tempfile.TemporaryDirectory() as temp_dir:
-            cookies_file_path = Path(temp_dir) / 'cookies.txt'
-            # This now uses the hard-coded string from above
-            cookies_file_path.write_text(cookie_string.strip())
-            ydl_opts['cookiefile'] = str(cookies_file_path)
-            logger.info("Using HARD-CODED cookies for video info extraction test.")
+            if cookies_data:
+                cookies_file_path = Path(temp_dir) / 'cookies.txt'
+                cookies_file_path.write_text(cookies_data)
+                ydl_opts['cookiefile'] = str(cookies_file_path)
+                logger.info("Using YouTube cookies for video info extraction.")
             
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(self.clean_youtube_url(url), download=False)
                     return {'video_id': info.get('id'), 'title': info.get('title'), 'upload_date': info.get('upload_date')}
             except Exception as e:
-                # The error message from yt-dlp is often very informative
                 error_detail = str(e)
                 logger.error(f"Failed to extract video info: {error_detail}")
                 raise HTTPException(status_code=400, detail=f"Failed to extract video info: {error_detail}")
@@ -242,28 +208,10 @@ class CBProcessor:
             subprocess.run(cmd, check=True, capture_output=True)
             return str(output_file)
         else:
-            try:
-                return self._extract_with_ytdlp(source_path, temp_dir)
-            except Exception as e:
-                logger.warning(f"yt-dlp failed: {e}")
-                
-            # Try 2: Get fresh cookies with browser
-            try:
-                logger.info("Attempting with fresh browser cookies")
-                fresh_cookies = BrowserHelper.get_youtube_cookies_with_browser()
-                return self._extract_with_ytdlp(source_path, temp_dir, fresh_cookies)
-            except Exception as e:
-                logger.warning(f"Browser cookies failed: {e}")
-                
-            # Try 3: Browser download
-            try:
-                logger.info("Attempting browser download")
-                output_path = str(Path(temp_dir) / 'audio.mp3')
-                return BrowserHelper.download_with_browser(source_path, output_path)
-            except Exception as e:
-                logger.error(f"All download methods failed: {e}")
-                raise
-    def _extract_with_ytdlp(self, url: str, temp_dir: str, cookies: str = None) -> str:
+            cookies = os.getenv('YOUTUBE_COOKIES')
+            return self.extract_with_ytdlp(source_path, temp_dir, cookies=cookies)
+        
+    def extract_with_ytdlp(self, url: str, temp_dir: str, cookies: str = None) -> str:
         output_template = Path(temp_dir) / 'audio.%(ext)s'
         
         # Enhanced options to avoid detection
@@ -293,7 +241,7 @@ class CBProcessor:
             }
         }
         
-        cookies_file = None  # Initialize variable
+        cookies_file = None  
         try:
             if cookies:
                 cookies_file = Path(temp_dir) / 'cookies.txt'
