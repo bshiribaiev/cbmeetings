@@ -177,9 +177,13 @@ class CBProcessor:
     def clean_youtube_url(self, url: str) -> str:
         match = re.search(r'[?&]v=([^&]+)', url)
         return f"https://www.youtube.com/watch?v={match.group(1)}" if match else url
-
-    def extract_video_info(self, url: str) -> Dict:
-        cookie_string = """# Netscape HTTP Cookie File
+    
+    def get_fresh_cookies(self) -> str:
+        cookies = os.getenv('YOUTUBE_COOKIES')
+        if cookies:
+            return cookies
+        
+        return """# Netscape HTTP Cookie File
 # http://curl.haxx.se/rfc/cookie_spec.html
 # This is a generated file!  Do not edit.
 
@@ -205,6 +209,9 @@ class CBProcessor:
 .youtube.com	TRUE	/	TRUE	1768254418	VISITOR_PRIVACY_METADATA	CgJVUxIEGgAgEw%3D%3D
 .youtube.com	TRUE	/	TRUE	1768238525	__Secure-ROLLOUT_TOKEN	CKHc_c64hNTZWhDZ396i7pqOAxiCp_SN8sGOAw%3D%3D
 """
+                
+    def extract_video_info(self, url: str) -> Dict:
+        cookie_string = self.get_fresh_cookies()
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -233,8 +240,11 @@ class CBProcessor:
             cmd = ['ffmpeg', '-i', source_path, '-vn', '-acodec', 'mp3', '-ar', '16000', '-ac', '1', str(output_file), '-y']
             subprocess.run(cmd, check=True, capture_output=True)
             return str(output_file)
-        else: # Is URL
+        else:
             output_template = Path(temp_dir) / 'audio.%(ext)s'
+            cookies_file_path = None  # Initialize for finally block
+            
+            # Enhanced options to avoid detection
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'outtmpl': str(output_template),
@@ -243,26 +253,44 @@ class CBProcessor:
                     'preferredcodec': 'mp3',
                     'preferredquality': '192'
                 }],
-                'quiet': True,
-                'no_warnings': True,
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'referer': 'http://googleusercontent.com/youtube/3',
+                'quiet': False,  # Set to False to see errors
+                'no_warnings': False,
+                # Add these options
+                'extract_flat': False,
+                'ignoreerrors': True,
+                'no_check_certificate': True,
+                'prefer_insecure': True,
+                # Headers to appear more like a browser
+                'headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                }
             }
-
-            # Check for cookies in the environment variables
-            cookies_data = os.getenv('YOUTUBE_COOKIES')
-            cookies_file_path = None
+            
+            # Try multiple cookie sources
+            cookies_data = self.get_fresh_cookies()
             if cookies_data:
-                # Write cookies to a temporary file for yt-dlp to use
                 cookies_file_path = Path(temp_dir) / 'cookies.txt'
                 cookies_file_path.write_text(cookies_data)
                 ydl_opts['cookiefile'] = str(cookies_file_path)
-                logger.info("Found YouTube cookies, using them for extraction.")
-                    
+                logger.info("Using cookies for extraction")
+            
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([self.clean_youtube_url(source_path)])
-                
+                    # Extract info first to check if accessible
+                    info = ydl.extract_info(self.clean_youtube_url(source_path), download=False)
+                    if info:
+                        logger.info(f"Video accessible: {info.get('title')}")
+                        # Now download (only once!)
+                        ydl.download([self.clean_youtube_url(source_path)])
+                    else:
+                        raise Exception("Could not access video info")
+                    
+                # Check for the output file
                 mp3_file = Path(temp_dir) / 'audio.mp3'
                 if mp3_file.exists() and mp3_file.stat().st_size > 0:
                     return str(mp3_file)
@@ -272,14 +300,18 @@ class CBProcessor:
                         if file.exists() and file.stat().st_size > 0:
                             return str(file)
                     raise Exception("Audio extraction failed: No valid audio file was produced")
-            
+                
             except Exception as e:
                 logger.error(f"yt-dlp download failed: {e}")
                 raise Exception(f"yt-dlp download failed: {e}")
             finally:
-                 # Clean up the temporary cookies file if it was created
+                # Clean up the temporary cookies file if it was created
                 if cookies_file_path and cookies_file_path.exists():
-                    os.remove(cookies_file_path)
+                    try:
+                        os.remove(cookies_file_path)
+                    except:
+                        pass  # Ignore cleanup errors
+                        
     def transcribe_audio(self, audio_path: str) -> str:    
         try:
             client = OpenAI(api_key=OPENAI_API_KEY)
