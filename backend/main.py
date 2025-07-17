@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict
 from openai import OpenAI
 from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
+from browser_helper import BrowserHelper
 
 # Import the summarization modules
 from summarize import summarize_transcript, MeetingSummary
@@ -241,76 +242,85 @@ class CBProcessor:
             subprocess.run(cmd, check=True, capture_output=True)
             return str(output_file)
         else:
-            output_template = Path(temp_dir) / 'audio.%(ext)s'
-            cookies_file_path = None  # Initialize for finally block
-            
-            # Enhanced options to avoid detection
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': str(output_template),
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192'
-                }],
-                'quiet': False,  # Set to False to see errors
-                'no_warnings': False,
-                # Add these options
-                'extract_flat': False,
-                'ignoreerrors': True,
-                'no_check_certificate': True,
-                'prefer_insecure': True,
-                # Headers to appear more like a browser
-                'headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1'
-                }
-            }
-            
-            # Try multiple cookie sources
-            cookies_data = self.get_fresh_cookies()
-            if cookies_data:
-                cookies_file_path = Path(temp_dir) / 'cookies.txt'
-                cookies_file_path.write_text(cookies_data)
-                ydl_opts['cookiefile'] = str(cookies_file_path)
-                logger.info("Using cookies for extraction")
-            
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    # Extract info first to check if accessible
-                    info = ydl.extract_info(self.clean_youtube_url(source_path), download=False)
-                    if info:
-                        logger.info(f"Video accessible: {info.get('title')}")
-                        # Now download (only once!)
-                        ydl.download([self.clean_youtube_url(source_path)])
-                    else:
-                        raise Exception("Could not access video info")
-                    
-                # Check for the output file
-                mp3_file = Path(temp_dir) / 'audio.mp3'
-                if mp3_file.exists() and mp3_file.stat().st_size > 0:
-                    return str(mp3_file)
-                else:
-                    # If not found, try looking for any audio file
-                    for file in Path(temp_dir).glob("audio.*"):
-                        if file.exists() and file.stat().st_size > 0:
-                            return str(file)
-                    raise Exception("Audio extraction failed: No valid audio file was produced")
-                
+                return self._extract_with_ytdlp(source_path, temp_dir)
             except Exception as e:
-                logger.error(f"yt-dlp download failed: {e}")
-                raise Exception(f"yt-dlp download failed: {e}")
-            finally:
-                # Clean up the temporary cookies file if it was created
-                if cookies_file_path and cookies_file_path.exists():
-                    try:
-                        os.remove(cookies_file_path)
-                    except:
-                        pass  # Ignore cleanup errors
+                logger.warning(f"yt-dlp failed: {e}")
+                
+            # Try 2: Get fresh cookies with browser
+            try:
+                logger.info("Attempting with fresh browser cookies")
+                fresh_cookies = BrowserHelper.get_youtube_cookies_with_browser()
+                return self._extract_with_ytdlp(source_path, temp_dir, fresh_cookies)
+            except Exception as e:
+                logger.warning(f"Browser cookies failed: {e}")
+                
+            # Try 3: Browser download
+            try:
+                logger.info("Attempting browser download")
+                output_path = str(Path(temp_dir) / 'audio.mp3')
+                return BrowserHelper.download_with_browser(source_path, output_path)
+            except Exception as e:
+                logger.error(f"All download methods failed: {e}")
+                raise
+    def _extract_with_ytdlp(self, url: str, temp_dir: str, cookies: str = None) -> str:
+        output_template = Path(temp_dir) / 'audio.%(ext)s'
+        
+        # Enhanced options to avoid detection
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': str(output_template),
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192'
+            }],
+            'quiet': False,  # Set to False to see errors
+            'no_warnings': False,
+            # Add these options
+            'extract_flat': False,
+            'ignoreerrors': True,
+            'no_check_certificate': True,
+            'prefer_insecure': True,
+            # Headers to appear more like a browser
+            'headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            }
+        }
+        
+        cookies_file = None  # Initialize variable
+        try:
+            if cookies:
+                cookies_file = Path(temp_dir) / 'cookies.txt'
+                cookies_file.write_text(cookies)
+                ydl_opts['cookiefile'] = str(cookies_file)
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+            mp3_file = Path(temp_dir) / 'audio.mp3'
+            if mp3_file.exists() and mp3_file.stat().st_size > 0:
+                return str(mp3_file)
+            else:
+                for file in Path(temp_dir).glob("audio.*"):
+                    if file.exists() and file.stat().st_size > 0:
+                        return str(file)
+                raise Exception("Audio extraction failed: No valid audio file was produced")
+
+        except Exception as e:
+            logger.error(f"yt-dlp download failed: {e}")
+            raise Exception(f"yt-dlp download failed: {e}")
+        finally:
+            if cookies_file and cookies_file.exists():
+                try:
+                    os.remove(cookies_file)
+                except:
+                    pass
                         
     def transcribe_audio(self, audio_path: str) -> str:    
         try:
