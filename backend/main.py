@@ -222,6 +222,7 @@ class CBProcessor:
             }
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"YouTube API request failed: {e}")
+        
     def extract_audio(self, source_path: str, temp_dir: str, is_file: bool) -> str:
         if is_file:
             output_file = Path(temp_dir) / f"audio_{Path(source_path).stem}.mp3"
@@ -232,7 +233,7 @@ class CBProcessor:
             logger.info("Using Cobalt API to get direct audio URL...")
             try:
                 # Ask Cobalt for a direct download link
-                cobalt_api_url = "https://co.wuk.sh/api/json"
+                cobalt_api_url = "https://api.cobalt.tools/api/json"
                 payload = {
                     "url": source_path,
                     "aFormat": "mp3",
