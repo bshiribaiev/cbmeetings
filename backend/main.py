@@ -234,14 +234,15 @@ class CBProcessor:
             try:
                 # Ask Cobalt for a direct download link
                 cobalt_api_url = "https://api.cobalt.tools/api/json"
+                cleaned_url = self.clean_youtube_url(source_path)
                 payload = {
-                    "url": source_path,
+                    "url": cleaned_url,
                     "aFormat": "mp3",
                     "isAudioOnly": True
                 }
                 response = requests.post(cobalt_api_url, json=payload, timeout=30)
-                response.raise_for_status()  # Raise an exception for bad status codes
-
+                response.raise_for_status()  
+                
                 data = response.json()
                 if data.get('status') != 'stream':
                     raise Exception(f"Cobalt API returned an error: {data.get('text', 'Unknown error')}")
