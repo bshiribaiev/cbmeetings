@@ -27,6 +27,7 @@ from typing import Dict
 from openai import OpenAI
 from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
 from googleapiclient.discovery import build
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # Import the summarization modules
 from summarize import summarize_transcript, MeetingSummary
@@ -285,7 +286,31 @@ class CBProcessor:
             
         except Exception as e:
             raise Exception(f"OpenAI Whisper API failed: {str(e)}")
-
+        
+    def get_transcript_directly(self, video_id: str) -> Optional[str]:
+        try:
+            # Get available transcripts
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            
+            # Try to get English transcript
+            try:
+                transcript = transcript_list.find_transcript(['en'])
+            except:
+                # Get any available transcript and translate
+                transcript = transcript_list.find_generated_transcript(['en'])
+            
+            # Get the actual transcript
+            transcript_data = transcript.fetch()
+            
+            # Combine all text
+            full_text = ' '.join([entry['text'] for entry in transcript_data])
+            
+            return full_text
+            
+        except Exception as e:
+            logger.warning(f"Could not get YouTube transcript: {e}")
+            return None
+        
     def extract_meeting_date(self, title: str, transcript: str) -> str:
         """
         More robustly extracts a meeting date by checking title, then the start of the transcript,
@@ -374,28 +399,27 @@ def core_video_processing_logic(video_id: str, title: str, url: str):
                 WHERE video_id = ?
             """, (datetime.now().isoformat(), video_id))
         
-        # Stage 1: Audio extraction
-        current_stage = "audio_extraction"
+        # Audio extraction & transcription
+        current_stage = "transcript_extraction"
         logger.info(f"Stage: {current_stage} for {video_id}")
+        transcript = processor.get_transcript_directly(video_id)
         
-        with tempfile.TemporaryDirectory() as temp_dir:
-            try:
-                audio_path = processor.extract_audio(url, temp_dir, is_file=False)
-            except Exception as e:
-                raise Exception(f"Audio extraction failed: {str(e)}")
-            
-            # Stage 2: Transcription
-            current_stage = "transcription"
+        if not transcript:
+            current_stage = "audio_extraction"
             logger.info(f"Stage: {current_stage} for {video_id}")
             
-            try:
-                transcript = processor.transcribe_audio(audio_path)
-                if not transcript or len(transcript.strip()) < 100:
-                    raise Exception("Transcription produced insufficient content")
-            except Exception as e:
-                raise Exception(f"Transcription failed: {str(e)}")
+            with tempfile.TemporaryDirectory() as temp_dir:
+                try:
+                    audio_path = processor.extract_audio(url, temp_dir, is_file=False)
+                    current_stage = "transcription"
+                    logger.info(f"Stage: {current_stage} for {video_id}")
+                except Exception as e:
+                    raise Exception(f"Audio extraction failed: {str(e)}")
+                
+            if not transcript or len(transcript.strip()) < 100:
+                raise Exception("Transcription produced insufficient content")
         
-        # Stage 3: Analysis
+        # Analysis
         current_stage = "analysis"
         logger.info(f"Stage: {current_stage} for {video_id}")
         
