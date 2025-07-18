@@ -1,13 +1,13 @@
-## cbmeetings
+# cbmeetings
 
 This app analyzes long Manhattan Community Board meetings and turns them into quickly readable summaries
 with key points and decisions.
 
 <img src='./landing.png' alt='main page' width='400' height='400'>
-<img src='./list.png' alt='list page' width='400' height='400'>
-<img src='./summary.png' alt='summary page' width='400' height='400'>
+<img src='./list.png' alt='list page' width='400' height='600'>
+<img src='./summary.png' alt='summary page' width='400' height='600'>
 
-# Technolgoes used
+## Technolgoes used
 
 - Frontend: Typescript, React
 - Backend: Python, Fast API, FFmpeg

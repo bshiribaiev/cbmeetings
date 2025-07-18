@@ -231,45 +231,7 @@ class CBProcessor:
             subprocess.run(cmd, check=True, capture_output=True)
             return str(output_file)
         else:
-            logger.info("Using Cobalt API to get direct audio URL...")
-            try:
-                # Ask Cobalt for a direct download link
-                cobalt_api_url = "https://api.cobalt.tools/api/json"
-                cleaned_url = self.clean_youtube_url(source_path)
-                payload = {
-                    "url": cleaned_url,
-                    "aFormat": "mp3",
-                    "isAudioOnly": True
-                }
-                response = requests.post(cobalt_api_url, json=payload, timeout=30)
-                response.raise_for_status()  
-                
-                data = response.json()
-                if data.get('status') != 'stream':
-                    raise Exception(f"Cobalt API returned an error: {data.get('text', 'Unknown error')}")
-
-                audio_download_url = data.get('url')
-                if not audio_download_url:
-                    raise Exception("Cobalt API did not return a download URL.")
-
-                # Download the audio file from the direct link
-                logger.info(f"Downloading audio from direct URL...")
-                output_path = Path(temp_dir) / 'audio.mp3'
-                
-                with requests.get(audio_download_url, stream=True, timeout=300) as r:
-                    r.raise_for_status()
-                    with open(output_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                
-                if not output_path.exists() or output_path.stat().st_size == 0:
-                    raise Exception("Downloaded audio file is empty.")
-
-                return str(output_path)
-
-            except Exception as e:
-                logger.error(f"Audio extraction via Cobalt failed: {e}")
-                raise Exception(f"Audio extraction via Cobalt failed: {e}")
+            raise Exception("Direct audio download is not supported. Please use the transcript API or upload the file manually.")
                         
     def transcribe_audio(self, audio_path: str) -> str:    
         try:
@@ -289,23 +251,36 @@ class CBProcessor:
         
     def get_transcript_directly(self, video_id: str) -> Optional[str]:
         try:
+            logger.info(f"Attempting to get transcript directly for video: {video_id}")
+            
             # Get available transcripts
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
             # Try to get English transcript
+            transcript = None
             try:
-                transcript = transcript_list.find_transcript(['en'])
+                # Try manually created transcripts first
+                transcript = transcript_list.find_manually_created_transcript(['en'])
+                logger.info("Found manual English transcript")
             except:
-                # Get any available transcript and translate
-                transcript = transcript_list.find_generated_transcript(['en'])
+                try:
+                    # Fall back to auto-generated
+                    transcript = transcript_list.find_generated_transcript(['en'])
+                    logger.info("Found auto-generated English transcript")
+                except:
+                    # Get any transcript and translate to English
+                    transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+                    logger.info("Found transcript in English variant")
             
-            # Get the actual transcript
-            transcript_data = transcript.fetch()
-            
-            # Combine all text
-            full_text = ' '.join([entry['text'] for entry in transcript_data])
-            
-            return full_text
+            if transcript:
+                # Get the actual transcript data
+                transcript_data = transcript.fetch()
+                
+                # Combine all text
+                full_text = ' '.join([entry['text'] for entry in transcript_data])
+                
+                logger.info(f"Successfully extracted transcript, length: {len(full_text)}")
+                return full_text
             
         except Exception as e:
             logger.warning(f"Could not get YouTube transcript: {e}")
@@ -426,7 +401,7 @@ def core_video_processing_logic(video_id: str, title: str, url: str):
         meeting_date = processor.extract_meeting_date(title, transcript)
         analysis, summary_obj = processor.summarize_and_analyze(transcript, title, meeting_date)
         
-        # Stage 4: Saving results
+        # Saving results
         current_stage = "saving_results"
         processor.save_results(video_id, analysis, transcript, time.time() - start_time, meeting_date)
         
@@ -491,8 +466,13 @@ async def process_youtube_video_async(request: ProcessRequest, background_tasks:
     try:
         video_info = processor.extract_video_info(request.url)
         video_id, title = video_info['video_id'], video_info['title']
-
+        
+        # Check if transcript is available before queuing
+        transcript_available = processor.get_transcript_directly(video_id) is not None
+        
         response_message = "Video queued for processing. Check the meeting list for updates."
+        if not transcript_available:
+            response_message += " Note: This video has no captions, processing may fail."
 
         with processor.get_db_connection() as conn:
             existing = conn.execute("SELECT status FROM processed_videos WHERE video_id = ?", (video_id,)).fetchone()
@@ -507,9 +487,19 @@ async def process_youtube_video_async(request: ProcessRequest, background_tasks:
         
         background_tasks.add_task(core_video_processing_logic, video_id, title, request.url)
         
-        return {"success": True, "message": response_message, "video_id": video_id}
+        return {
+            "success": True, 
+            "message": response_message, 
+            "video_id": video_id,
+            "transcript_available": transcript_available
+        }
 
     except Exception as e:
+        if "quota" in str(e).lower():
+            raise HTTPException(
+                status_code=429,
+                detail="YouTube API quota exceeded. Please try again later or use the file upload option."
+            )
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/process-file")
