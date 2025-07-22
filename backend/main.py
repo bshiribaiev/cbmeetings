@@ -12,7 +12,6 @@ import contextlib
 import os
 import uvicorn
 import yt_dlp
-import requests
 
 # FastAPI and server imports
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -26,8 +25,6 @@ from pathlib import Path
 from typing import Dict
 from openai import OpenAI
 from config import USE_OPENAI_WHISPER, OPENAI_API_KEY
-from googleapiclient.discovery import build
-from youtube_transcript_api import YouTubeTranscriptApi
 
 # Import the summarization modules
 from summarize import summarize_transcript, MeetingSummary
@@ -57,16 +54,68 @@ whisper_model = None
 db_path = Path("cb_meetings.db")
 output_dir = Path("processed_meetings")
 
+class ProxyVideoProcessor:
+    def __init__(self):
+        # Get proxy from environment variable
+        self.proxy_url = os.getenv('PROXY_URL')  
+        
+        if not self.proxy_url:
+            logger.warning("No PROXY_URL set, downloads might fail on Render")
+    
+    def download_audio_with_proxy(self, url: str, temp_dir: str) -> str:
+        output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
+        
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '128',
+            }],
+            'outtmpl': output_template,
+            'quiet': True,
+            'no_warnings': True,
+            'no_check_certificate': True,
+            # Add proxy configuration
+            'proxy': self.proxy_url,
+            # Additional options to help with extraction
+            'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            # Retry options
+            'retries': 3,
+            'fragment_retries': 3,
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                logger.info(f"Downloading audio from: {url}")
+                info = ydl.extract_info(url, download=True)
+                
+                # Get the actual output filename
+                filename = ydl.prepare_filename(info)
+                audio_file = filename.rsplit('.', 1)[0] + '.mp3'
+                
+                if os.path.exists(audio_file):
+                    file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
+                    logger.info(f"Downloaded successfully: {file_size_mb:.1f}MB")
+                    return audio_file
+                else:
+                    raise Exception("Audio file not found after download")
+                    
+        except Exception as e:
+            logger.error(f"Download failed: {str(e)}")
+            raise
+
 class CBProcessor:
     def __init__(self):
         # Define instance attributes
         self.db_path = Path("cb_meetings.db")
         self.output_dir = Path("processed_meetings")
-        
         # Initialize
         self.output_dir.mkdir(exist_ok=True)
         self.init_database()
         self.load_models()
+        self.proxy_processor = ProxyVideoProcessor()
 
     @contextlib.contextmanager
     def get_db_connection(self, read_only=False):
@@ -182,48 +231,28 @@ class CBProcessor:
         return f"https://www.youtube.com/watch?v={match.group(1)}" if match else url
     
     def extract_video_info(self, url: str) -> Dict:
-        api_key = os.getenv('YOUTUBE_API_KEY')
-        if not api_key:
-            raise Exception("YOUTUBE_API_KEY environment variable not set.")
-
-        video_id = None
-        patterns = [
-            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
-            r'(?:youtu\.be\/|embed\/|v\/|shorts\/)([0-9A-Za-z_-]{11})'
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                video_id = match.group(1)
-                break
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+        }
         
-        # Add this logging line for debugging
-        logger.info(f"Extracted video ID: '{video_id}' from URL: '{url}'")
+        cookies_data = os.getenv('YOUTUBE_COOKIES')
+        with tempfile.TemporaryDirectory() as temp_dir:
+            if cookies_data:
+                cookies_file_path = Path(temp_dir) / 'cookies.txt'
+                cookies_file_path.write_text(cookies_data)
+                ydl_opts['cookiefile'] = str(cookies_file_path)
+                logger.info("Using YouTube cookies for video info extraction.")
+            
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(self.clean_youtube_url(url), download=False)
+                    return {'video_id': info.get('id'), 'title': info.get('title'), 'upload_date': info.get('upload_date')}
+            except Exception as e:
+                error_detail = str(e)
+                logger.error(f"Failed to extract video info: {error_detail}")
+                raise HTTPException(status_code=400, detail=f"Failed to extract video info: {error_detail}")
 
-        if not video_id:
-            raise HTTPException(status_code=400, detail="Could not parse YouTube video ID from URL.")
-
-        # 3. Call the official YouTube Data API
-        try:
-            youtube = build('youtube', 'v3', developerKey=api_key)
-            request = youtube.videos().list(
-                part="snippet",
-                id=video_id
-            )
-            response = request.execute()
-
-            if not response.get('items'):
-                raise Exception("Video not found or API error.")
-
-            snippet = response['items'][0]['snippet']
-            return {
-                'video_id': video_id,
-                'title': snippet.get('title'),
-                'upload_date': snippet.get('publishedAt')
-            }
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"YouTube API request failed: {e}")
-        
     def extract_audio(self, source_path: str, temp_dir: str, is_file: bool) -> str:
         if is_file:
             output_file = Path(temp_dir) / f"audio_{Path(source_path).stem}.mp3"
@@ -231,7 +260,67 @@ class CBProcessor:
             subprocess.run(cmd, check=True, capture_output=True)
             return str(output_file)
         else:
-            raise Exception("Direct audio download is not supported. Please use the transcript API or upload the file manually.")
+            cookies = os.getenv('YOUTUBE_COOKIES')
+            return self.extract_with_ytdlp(source_path, temp_dir, cookies=cookies)
+        
+    def extract_with_ytdlp(self, url: str, temp_dir: str, cookies: str = None) -> str:
+        output_template = Path(temp_dir) / 'audio.%(ext)s'
+        
+        # Enhanced options to avoid detection
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': str(output_template),
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192'
+            }],
+            'quiet': False,  # Set to False to see errors
+            'no_warnings': False,
+            # Add these options
+            'extract_flat': False,
+            'ignoreerrors': True,
+            'no_check_certificate': True,
+            'prefer_insecure': True,
+            # Headers to appear more like a browser
+            'headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            }
+        }
+        
+        cookies_file = None  
+        try:
+            if cookies:
+                cookies_file = Path(temp_dir) / 'cookies.txt'
+                cookies_file.write_text(cookies)
+                ydl_opts['cookiefile'] = str(cookies_file)
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+            mp3_file = Path(temp_dir) / 'audio.mp3'
+            if mp3_file.exists() and mp3_file.stat().st_size > 0:
+                return str(mp3_file)
+            else:
+                for file in Path(temp_dir).glob("audio.*"):
+                    if file.exists() and file.stat().st_size > 0:
+                        return str(file)
+                raise Exception("Audio extraction failed: No valid audio file was produced")
+
+        except Exception as e:
+            logger.error(f"yt-dlp download failed: {e}")
+            raise Exception(f"yt-dlp download failed: {e}")
+        finally:
+            if cookies_file and cookies_file.exists():
+                try:
+                    os.remove(cookies_file)
+                except:
+                    pass
                         
     def transcribe_audio(self, audio_path: str) -> str:    
         try:
@@ -249,43 +338,21 @@ class CBProcessor:
         except Exception as e:
             raise Exception(f"OpenAI Whisper API failed: {str(e)}")
         
-    def get_transcript_directly(self, video_id: str) -> Optional[str]:
-        try:
-            logger.info(f"Attempting to get transcript directly for video: {video_id}")
-            
-            # Get available transcripts
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-            
-            # Try to get English transcript
-            transcript = None
+    def download_and_transcribe(self, url: str) -> str:
+        with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                # Try manually created transcripts first
-                transcript = transcript_list.find_manually_created_transcript(['en'])
-                logger.info("Found manual English transcript")
-            except:
-                try:
-                    # Fall back to auto-generated
-                    transcript = transcript_list.find_generated_transcript(['en'])
-                    logger.info("Found auto-generated English transcript")
-                except:
-                    # Get any transcript and translate to English
-                    transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
-                    logger.info("Found transcript in English variant")
-            
-            if transcript:
-                # Get the actual transcript data
-                transcript_data = transcript.fetch()
+                # Download audio using proxy
+                audio_path = self.proxy_processor.download_audio_with_proxy(url, temp_dir)
                 
-                # Combine all text
-                full_text = ' '.join([entry['text'] for entry in transcript_data])
+                # Transcribe with OpenAI Whisper API
+                transcript = self.transcribe_audio(audio_path)
                 
-                logger.info(f"Successfully extracted transcript, length: {len(full_text)}")
-                return full_text
+                return transcript
+                
+            except Exception as e:
+                logger.error(f"Download/transcribe failed: {e}")
+                raise
             
-        except Exception as e:
-            logger.warning(f"Could not get YouTube transcript: {e}")
-            return None
-        
     def extract_meeting_date(self, title: str, transcript: str) -> str:
         """
         More robustly extracts a meeting date by checking title, then the start of the transcript,
@@ -374,34 +441,35 @@ def core_video_processing_logic(video_id: str, title: str, url: str):
                 WHERE video_id = ?
             """, (datetime.now().isoformat(), video_id))
         
-        # Audio extraction & transcription
-        current_stage = "transcript_extraction"
+        # Stage 1: Audio extraction
+        current_stage = "audio_extraction"
         logger.info(f"Stage: {current_stage} for {video_id}")
-        transcript = processor.get_transcript_directly(video_id)
         
-        if not transcript:
-            current_stage = "audio_extraction"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                audio_path = processor.proxy_processor.download_audio_with_proxy(url, temp_dir)
+            except Exception as e:
+                raise Exception(f"Audio extraction failed: {str(e)}")
+            
+            # Stage 2: Transcription
+            current_stage = "transcription"
             logger.info(f"Stage: {current_stage} for {video_id}")
             
-            with tempfile.TemporaryDirectory() as temp_dir:
-                try:
-                    audio_path = processor.extract_audio(url, temp_dir, is_file=False)
-                    current_stage = "transcription"
-                    logger.info(f"Stage: {current_stage} for {video_id}")
-                except Exception as e:
-                    raise Exception(f"Audio extraction failed: {str(e)}")
-                
-            if not transcript or len(transcript.strip()) < 100:
-                raise Exception("Transcription produced insufficient content")
+            try:
+                transcript = processor.transcribe_audio(audio_path)
+                if not transcript or len(transcript.strip()) < 100:
+                    raise Exception("Transcription produced insufficient content")
+            except Exception as e:
+                raise Exception(f"Transcription failed: {str(e)}")
         
-        # Analysis
+        # Stage 3: Analysis
         current_stage = "analysis"
         logger.info(f"Stage: {current_stage} for {video_id}")
         
         meeting_date = processor.extract_meeting_date(title, transcript)
         analysis, summary_obj = processor.summarize_and_analyze(transcript, title, meeting_date)
         
-        # Saving results
+        # Stage 4: Saving results
         current_stage = "saving_results"
         processor.save_results(video_id, analysis, transcript, time.time() - start_time, meeting_date)
         
@@ -466,13 +534,8 @@ async def process_youtube_video_async(request: ProcessRequest, background_tasks:
     try:
         video_info = processor.extract_video_info(request.url)
         video_id, title = video_info['video_id'], video_info['title']
-        
-        # Check if transcript is available before queuing
-        transcript_available = processor.get_transcript_directly(video_id) is not None
-        
+
         response_message = "Video queued for processing. Check the meeting list for updates."
-        if not transcript_available:
-            response_message += " Note: This video has no captions, processing may fail."
 
         with processor.get_db_connection() as conn:
             existing = conn.execute("SELECT status FROM processed_videos WHERE video_id = ?", (video_id,)).fetchone()
@@ -487,19 +550,9 @@ async def process_youtube_video_async(request: ProcessRequest, background_tasks:
         
         background_tasks.add_task(core_video_processing_logic, video_id, title, request.url)
         
-        return {
-            "success": True, 
-            "message": response_message, 
-            "video_id": video_id,
-            "transcript_available": transcript_available
-        }
+        return {"success": True, "message": response_message, "video_id": video_id}
 
     except Exception as e:
-        if "quota" in str(e).lower():
-            raise HTTPException(
-                status_code=429,
-                detail="YouTube API quota exceeded. Please try again later or use the file upload option."
-            )
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/process-file")
