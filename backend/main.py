@@ -12,6 +12,7 @@ import contextlib
 import os
 import uvicorn
 import yt_dlp
+import requests
 
 # FastAPI and server imports
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -56,12 +57,16 @@ output_dir = Path("processed_meetings")
 
 class ProxyVideoProcessor:
     def __init__(self):
-        # Get proxy from environment variable
         self.proxy_url = os.getenv('PROXY_URL')  
         
         if not self.proxy_url:
             logger.warning("No PROXY_URL set, downloads might fail on Render")
-    
+        else:
+            # Log proxy info (without password)
+            proxy_parts = self.proxy_url.split('@')
+            if len(proxy_parts) > 1:
+                logger.info(f"Using proxy: ...@{proxy_parts[1]}")
+                
     def download_audio_with_proxy(self, url: str, temp_dir: str) -> str:
         output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
         
@@ -73,13 +78,14 @@ class ProxyVideoProcessor:
                 'preferredquality': '128',
             }],
             'outtmpl': output_template,
-            'quiet': True,
-            'no_warnings': True,
+            'quiet': False,  # Set to False to see more debug info
+            'verbose': True,  # Add verbose logging
             'no_check_certificate': True,
-            # Add proxy configuration
+            # Proxy configuration
             'proxy': self.proxy_url,
-            # Additional options to help with extraction
-            'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+            # Force proxy for all connections
+            'source_address': '0.0.0.0',
+            # User agent
             'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             # Retry options
             'retries': 3,
@@ -105,6 +111,35 @@ class ProxyVideoProcessor:
         except Exception as e:
             logger.error(f"Download failed: {str(e)}")
             raise
+        
+    def test_proxy_connection(self):
+        import requests
+        
+        if not self.proxy_url:
+            return False, "No proxy URL configured"
+        
+        proxies = {
+            'http': self.proxy_url,
+            'https': self.proxy_url
+        }
+        
+        try:
+            # Test with a simple request
+            response = requests.get(
+                'http://lumtest.com/myip.json',
+                proxies=proxies,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Proxy test successful. IP: {data.get('ip', 'unknown')}")
+                return True, f"Connected via IP: {data.get('ip', 'unknown')}"
+            else:
+                return False, f"Proxy returned status: {response.status_code}"
+                
+        except Exception as e:
+            return False, f"Proxy test failed: {str(e)}"
 
 class CBProcessor:
     def __init__(self):
@@ -613,7 +648,21 @@ async def process_single_pending_video(video_id: str, background_tasks: Backgrou
         return {"success": True, "message": f"Queued video {video_id} for processing."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/test-proxy")
+async def test_proxy():
+    success, message = processor.proxy_processor.test_proxy_connection()
+    return {"success": success, "message": message}
 
+@app.get("/my-ip")
+async def get_my_ip():
+    import requests
+    try:
+        response = requests.get('https://api.ipify.org?format=json')
+        return {"ip": response.json()['ip']}
+    except:
+        return {"error": "Could not get IP"}
+    
 # local 
 # if __name__ == "__main__":
 #     uvicorn.run(
