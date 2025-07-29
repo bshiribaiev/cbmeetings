@@ -70,11 +70,12 @@ class ProxyVideoProcessor:
             import re
             match = re.match(r'http://brd-customer-(.+?)-zone-(.+?):(.+?)@(.+?):(\d+)', self.proxy_url)
             if match:
-                self.account_id = f"hl_{match.group(1)}"
-                self.zone_name = "unblocker1"  # Use the new unblocker zone!
+                self.account_id = match.group(1)
+                self.zone_name = match.group(2)
                 self.password = match.group(3)
                 self.proxy_host = match.group(4)
                 self.proxy_port = match.group(5)
+                logger.info(f"Parsed procy - Account: {self.account_id}, Zone: {self.zone_name}")
             else:
                 logger.error("Could not parse PROXY_URL")
                 self.account_id = None
@@ -92,7 +93,6 @@ class ProxyVideoProcessor:
         return f"http://brd-customer-{self.account_id}-zone-{self.zone_name}-session-{session_id}:{self.password}@{self.proxy_host}:{self.proxy_port}"
     
     def download_audio_with_proxy(self, url: str, temp_dir: str) -> str:
-        """Download audio using Web Unlocker with yt-dlp"""
         output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
         
         # Generate unique session ID for this download
