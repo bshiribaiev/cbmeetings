@@ -83,11 +83,9 @@ class ProxyVideoProcessor:
             self.account_id = None
     
     def generate_session_id(self):
-        """Generate random session ID between 10000000 and 999999999"""
         return random.randint(10000000, 999999999)
     
     def build_proxy_url(self, session_id):
-        """Build proxy URL with session ID"""
         if not self.account_id:
             return self.proxy_url
         
@@ -113,7 +111,6 @@ class ProxyVideoProcessor:
             'outtmpl': output_template,
             'quiet': False,
             'verbose': True,
-            # Web Unlocker specific settings
             'proxy': proxy_with_session,
             'nocheckcertificate': True,  # Required for Web Unlocker
             'concurrent_fragment_downloads': 1,  # Equivalent to -N 1
@@ -751,6 +748,35 @@ async def process_single_pending_video(video_id: str, background_tasks: Backgrou
         return {"success": True, "message": f"Queued video {video_id} for processing."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/test-unlocker")
+async def test_unlocker():
+    import urllib.request
+    import ssl
+    
+    proxy_url = os.getenv('PROXY_URL')
+    if not proxy_url:
+        return {"error": "No PROXY_URL configured"}
+    
+    url = 'https://geo.brdtest.com/welcome.txt?product=unlocker&method=native'
+    
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({'https': proxy_url, 'http': proxy_url}),
+        urllib.request.HTTPSHandler(context=ssl._create_unverified_context())
+    )
+    
+    try:
+        response = opener.open(url).read().decode()
+        return {
+            "success": True,
+            "response": response,
+            "message": "Web Unlocker is working!"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 # local
 # if __name__ == "__main__":
