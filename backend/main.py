@@ -62,12 +62,8 @@ output_dir = Path("processed_meetings")
 
 class ProxyVideoProcessor:
     def __init__(self):
-        # Extract credentials from PROXY_URL
         self.proxy_url = os.getenv('PROXY_URL')
         if self.proxy_url:
-            # Parse the proxy URL to extract components
-            # Format: http://brd-customer-hl_f41c15cc-zone-cbmeetings:password@brd.superproxy.io:33335
-            import re
             match = re.match(r'http://brd-customer-(.+?)-zone-(.+?):(.+?)@(.+?):(\d+)', self.proxy_url)
             if match:
                 self.account_id = match.group(1)
