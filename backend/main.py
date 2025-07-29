@@ -13,6 +13,7 @@ import os
 import uvicorn
 import yt_dlp
 import random
+import requests
 
 # FastAPI and server imports
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -64,6 +65,9 @@ class ProxyVideoProcessor:
         # Extract credentials from PROXY_URL
         self.proxy_url = os.getenv('PROXY_URL')
         if self.proxy_url:
+            # Parse the proxy URL to extract components
+            # Format: http://brd-customer-hl_f41c15cc-zone-cbmeetings:password@brd.superproxy.io:33335
+            import re
             match = re.match(r'http://brd-customer-(.+?)-zone-(.+?):(.+?)@(.+?):(\d+)', self.proxy_url)
             if match:
                 self.account_id = f"hl_{match.group(1)}"
@@ -79,15 +83,18 @@ class ProxyVideoProcessor:
             self.account_id = None
     
     def generate_session_id(self):
+        """Generate random session ID between 10000000 and 999999999"""
         return random.randint(10000000, 999999999)
     
     def build_proxy_url(self, session_id):
+        """Build proxy URL with session ID"""
         if not self.account_id:
             return self.proxy_url
         
         return f"http://brd-customer-{self.account_id}-zone-{self.zone_name}-session-{session_id}:{self.password}@{self.proxy_host}:{self.proxy_port}"
     
     def download_audio_with_proxy(self, url: str, temp_dir: str) -> str:
+        """Download audio using Web Unlocker with yt-dlp"""
         output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
         
         # Generate unique session ID for this download
@@ -162,8 +169,6 @@ class ProxyVideoProcessor:
         raise Exception(f"All download attempts failed. Last error: {last_error}")
     
     def test_proxy_connection(self):
-        """Test if Web Unlocker proxy is working"""
-        import requests
         
         if not self.account_id:
             return False, "No proxy configured"
@@ -194,7 +199,6 @@ class ProxyVideoProcessor:
                 
         except Exception as e:
             return False, f"Web Unlocker test failed: {str(e)}"
-
 
 class CBProcessor:
     def __init__(self):
