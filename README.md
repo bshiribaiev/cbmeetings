@@ -1,13 +1,14 @@
 # cbmeetings
 
-This app analyzes Manhattan Community Board meetings and turns them into quickly readable summaries
-with key points and decisions.
+## Problem
 
-<img src='./landing.png' alt='main page' width='400' height='400'>
+Manhattan Community Board meetings are long, complex, and often inaccessible to the public due to their length and lack of concise documentation. Important decisions and discussions can be missed by community members, journalists, and policymakers who do not have the time or resources to review hours of meeting footage or transcripts.
 
-<img src='./list.png' alt='list page' width='400' height='600'>
+![Demo](./walkthrough.gif)
 
-<img src='./summary.png' alt='summary page' width='400' height='600'>
+## Impact
+
+By automatically analyzing and summarizing these meetings, cbmeetings makes local government more transparent and accessible. The app enables residents, advocates, and officials to quickly understand key points, decisions, and community issues, fostering greater civic engagement and accountability.
 
 ## Technologies used
 
